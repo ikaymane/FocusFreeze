@@ -91,13 +91,13 @@ def snap(app_id, *procs, **kw):
                        kw.get("elevated", False), False)
 
 
-def test_freeze_writes_ledger_first_even_when_suspend_fails():
+def test_freeze_rolls_back_and_removes_entry_when_suspend_fails():
     fake = FakeOs([FakeProc(11)])
     fake.fail_suspend.add(11)
     act = RealActuator(os_layer=fake, ledger=Ledger())
     with pytest.raises(FreezeError):
         act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
-    assert set(Ledger().load()) == {"a.exe"}  # entry survived the failure
+    assert Ledger().load() == {}  # audit item 5: rolled back, nothing recorded
 
 
 def test_freeze_suspends_trims_and_measures_freed():
@@ -115,7 +115,7 @@ def test_freeze_skips_conhost_system_and_session0():
     act = RealActuator(os_layer=fake, ledger=Ledger())
     e = act.freeze(snap("a.exe", *[ProcRef(pid, 100.0) for pid in (11, 12, 13, 14)]), "s")
     assert fake.suspended == [11]  # only the real app process
-    assert [p.pid for p in e.procs] == [11, 12, 13, 14]  # entry keeps everything
+    assert [p.pid for p in e.procs] == [11]  # audit item 5: only suspended PIDs recorded
 
 
 def test_freeze_never_suspends_itself():
@@ -131,7 +131,7 @@ def test_freeze_never_drops_entry_on_pid_reuse():
     act = RealActuator(os_layer=fake, ledger=Ledger())
     act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
     assert fake.suspended == []  # stranger process untouched
-    assert [p.pid for p in Ledger().load()["a.exe"].procs] == [11]
+    assert Ledger().load()["a.exe"].procs == []  # audit item 5: nothing suspended (8a fails this)
 
 
 def test_freeze_twice_raises_and_suspends_once():
@@ -143,15 +143,16 @@ def test_freeze_twice_raises_and_suspends_once():
     assert fake.suspended == [11]  # no double suspend (would need double resume)
 
 
-def test_freeze_reports_each_failure_but_freezes_the_rest():
+def test_freeze_rolls_back_partial_freeze_on_failure():
     fake = FakeOs([FakeProc(11), FakeProc(12)])
     fake.fail_suspend.add(11)
     act = RealActuator(os_layer=fake, ledger=Ledger())
     with pytest.raises(FreezeError) as ei:
         act.freeze(snap("a.exe", ProcRef(11, 100.0), ProcRef(12, 100.0)), "s")
     assert list(ei.value.failures) == [11]
-    assert fake.suspended == [12]  # proc 12 still frozen; only successes recorded
-    assert set(Ledger().load()) == {"a.exe"}
+    assert fake.suspended == [12]
+    assert fake.resumed == [12]  # audit item 5: rolled back, not left frozen
+    assert Ledger().load() == {}  # audit item 5: entry removed on clean rollback
 
 
 def test_thaw_resumes_and_clears():
@@ -286,6 +287,8 @@ def test_freeze_reports_unreachable_live_process_as_failure():
     with pytest.raises(FreezeError) as ei:
         act.freeze(snap("a.exe", ProcRef(11, 100.0), ProcRef(12, 100.0)), "s")
     assert list(ei.value.failures) == [12]
+    assert fake.resumed == [11]  # audit item 5: rolled back
+    assert Ledger().load() == {}  # audit item 5: entry removed
     assert fake.suspended == [11]
 
 

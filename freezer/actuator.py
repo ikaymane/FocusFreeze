@@ -16,10 +16,11 @@ Safety rules:
 - Skipped processes (system/conhost/self/dead/PID-reuse) never fail the
   freeze; OS errors do, via FreezeError, one per app, so the agent loop
   can report them per app without stopping the rest.
-- A ledger entry is NEVER dropped because of a PID/create-time mismatch:
-  on freeze the full entry is written before anything is touched, and on
-  thaw a mismatched live process is left in the entry. Only confirmed-dead
-  PIDs are pruned, and only on the thaw path.
+- Freeze records only PIDs it actually suspended (audit item 5): skipped
+  or failed processes are narrowed out, and a failed freeze rolls back
+  (resumes) what it suspended and removes the entry. A thaw-time
+  PID/create-time mismatch NEVER drops the entry. Only confirmed-dead PIDs
+  are pruned, and only on the thaw path.
 - Freezing an already-frozen app raises instead of suspending twice: a
   double suspend needs a double resume, which would strand the app frozen.
 """
@@ -29,7 +30,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Callable, NoReturn, Protocol
 
 from freezer.contracts import AppSnapshot, LedgerEntry, ProcRef
 from freezer.ledger import Ledger, LedgerTampered, freeze_locked
@@ -61,7 +62,7 @@ SYSTEM_EXES = frozenset({
 
 
 class FreezeError(Exception):
-    """One app could not be (fully) frozen. The ledger entry is kept."""
+    """One app could not be (fully) frozen. entry is None on clean rollback."""
 
     def __init__(self, app_id: str, message: str, *,
                  failures: dict[int, str] | None = None,
@@ -373,6 +374,7 @@ class RealActuator:
         except Exception:  # noqa: BLE001 - cosmetic only, never fails a freeze
             log.debug("minimize failed for %s", app.app_id, exc_info=True)
         failures: dict[int, str] = {}
+        suspended: list[ProcRef] = []  # only PIDs actually suspended go here
         skipped: dict[int, str] = {}
         for pref in app.procs:
             info = self._safe_resolve(pref.pid)
@@ -388,23 +390,52 @@ class RealActuator:
                 continue
             try:
                 if not self._os.suspend_verified(pref.pid, pref.create_time):
-                    log.warning("freeze: PID reuse on %s pid=%d, keeping ledger entry",
+                    log.warning("freeze: PID reuse on %s pid=%d, not suspending",
                                 app.app_id, pref.pid)
                     skipped[pref.pid] = "pid_reuse"
                     continue
+                suspended.append(pref)  # suspended: trim failure still rolls back
                 self._os.trim(pref.pid)
             except OSError as e:
                 failures[pref.pid] = str(e)
-        after_mb = self._ws_total(app.procs)
-        entry.freed_mb = max(before_mb - after_mb, 0.0)
-        self._ledger.update(entry)
         if failures:
-            raise FreezeError(app.app_id, f"{len(failures)} process(es) failed",
-                              failures=failures, skipped=skipped, entry=entry)
+            return self._abort_partial(app.app_id, entry, before_mb, suspended,
+                                       failures, skipped)
+        entry.procs = suspended  # the ledger records only what we suspended
+        entry.freed_mb = max(before_mb - self._ws_total(app.procs), 0.0)
+        self._ledger.update(entry)
         log.info("froze %s: %.0f MB, %d skipped (%s)",
                  app.app_id, entry.freed_mb, len(skipped),
                  ",".join(sorted(set(skipped.values()))) or "none")
         return entry
+
+    def _abort_partial(self, app_id: str, entry: LedgerEntry, before_mb: float,
+                         suspended: list[ProcRef], failures: dict[int, str],
+                         skipped: dict[int, str]) -> NoReturn:
+        """Failures mid-freeze: resume what we suspended, keep the truth.
+
+        Clean rollback removes the entry entirely. Procs that refuse to
+        resume stay listed (narrowed to just them) so a later thaw retries
+        instead of stranding them with no record.
+        """
+        unresumed: list[ProcRef] = []
+        for pref in suspended:
+            try:
+                self._os.resume(pref.pid)
+            except OSError as e:
+                log.warning("freeze rollback: resume failed on %s pid=%d (%s), keeping entry",
+                            app_id, pref.pid, e)
+                unresumed.append(pref)
+        kept: LedgerEntry | None = None
+        if unresumed:
+            entry.procs = unresumed
+            entry.freed_mb = max(before_mb - self._ws_total(unresumed), 0.0)
+            self._ledger.update(entry)
+            kept = entry
+        else:
+            self._ledger.remove(app_id)
+        raise FreezeError(app_id, f"{len(failures)} process(es) failed, rolled back",
+                          failures=failures, skipped=skipped, entry=kept)
 
     def _resume_entry(self, entry: LedgerEntry) -> list[ProcRef]:
         """Resume every verifiable process; return the procs that must stay listed."""

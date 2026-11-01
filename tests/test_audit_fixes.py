@@ -169,3 +169,86 @@ def test_decode_with_corrupt_key_returns_tamper():
     assert led2.tampered is False  # flag is per-read, set by load()
     assert set(led2.load()) == {"a.exe"}
     assert led2.tampered is True
+
+
+# ---- item 5: partial freeze ----------------------------------------------------
+
+_TICK_SRC = (
+    "import sys, time\n"
+    "p = sys.argv[1]\n"
+    "while True:\n"
+    "    open(p, 'a').write(f'{time.time()}\\n')\n"
+    "    time.sleep(0.2)\n"
+)
+
+
+@pytest.fixture()
+def live_pair(tmp_path):
+    """Two real timestamp-writing children; both terminated on teardown."""
+    kids = []
+    for name in ("a.txt", "b.txt"):
+        marker = tmp_path / name
+        marker.write_text("", encoding="utf-8")
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _TICK_SRC, str(marker)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        kids.append((proc, marker))
+    try:
+        for _, marker in kids:
+            assert _ticks_advancing(marker), "child never started ticking"
+        yield kids
+    finally:
+        for proc, _ in kids:
+            proc.terminate()
+        for proc, _ in kids:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def snap_for_pair(pid_ctimes, app_id="tickpair.exe"):
+    prefs = [ProcRef(pid, ct) for pid, ct in pid_ctimes]
+    return AppSnapshot(app_id, app_id, prefs, [], 10.0, 3600.0,
+                       False, False, False, False)
+
+
+def _live_ctimes(procs):
+    os_layer = WindowsOs()
+    return [(p.pid, os_layer.resolve(p.pid).create_time) for p in procs]
+
+
+def test_partial_freeze_rolls_back_and_resumes(live_pair):
+    """Injected mid-freeze failure on a REAL suspend: rollback resumes both."""
+    from freezer.actuator import FreezeError
+    (proc_a, marker_a), (proc_b, marker_b) = live_pair
+    real_os = WindowsOs()
+    orig_trim = real_os.trim
+    state = {"done": False}
+
+    def fail_once(pid):
+        if pid == proc_b.pid and not state["done"]:
+            state["done"] = True
+            raise OSError("injected trim failure")
+        return orig_trim(pid)
+
+    real_os.trim = fail_once  # instance shadow; suspend/resume stay real
+    act = RealActuator(os_layer=real_os)
+    with pytest.raises(FreezeError) as ei:
+        act.freeze(snap_for_pair(_live_ctimes([proc_a, proc_b])), "audit")
+    assert list(ei.value.failures) == [proc_b.pid]
+    assert ei.value.entry is None  # clean rollback: nothing recorded
+    assert RealActuator().frozen() == []
+    assert _ticks_advancing(marker_a) and _ticks_advancing(marker_b)
+
+
+def test_pre_killed_child_narrowed_out_of_entry(live_pair):
+    """A child dead before freeze is skipped and left out of the entry."""
+    (proc_a, marker_a), (proc_b, _marker_b) = live_pair
+    ctimes = _live_ctimes([proc_a, proc_b])
+    proc_b.terminate()
+    proc_b.wait(timeout=5)
+    entry = RealActuator().freeze(snap_for_pair(ctimes), "audit")
+    assert [p.pid for p in entry.procs] == [proc_a.pid]
+    assert RealActuator().thaw_all() == ["tickpair.exe"]
+    assert _ticks_advancing(marker_a)
