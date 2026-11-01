@@ -52,6 +52,11 @@ GUARDIAN_MIN_IDLE_S = 5 * 60
 # Plain words for the card (D renders these; policy rule ids are B's).
 BLOCK_REASONS = {
     "system_process": "Part of Windows", "security": "Security software",
+    "security_software": "Security software",
+    "protected_process": "Protected process",
+    "accessibility": "Accessibility tool",
+    "password_manager": "Password manager",
+    "user_never_freeze": "You protected this app",
     "foreground": "You're using it right now", "plays_audio": "Playing sound",
     "elevated": "Runs as administrator", "self": "Focus Freeze itself",
     "unknown_app": "Closed or not found",

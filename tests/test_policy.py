@@ -103,6 +103,13 @@ def test_first_matching_rule_wins():
     assert rule_of("explorer.exe", plays_audio=True) == "system_process"
 
 
+def test_every_rule_has_a_card_label():
+    from freezer.agent import BLOCK_REASONS, block_reason
+    for rule in RULES:
+        assert rule in BLOCK_REASONS, f"no card label for {rule}"
+        assert block_reason(rule) != "Protected by a safety rule"
+
+
 def test_every_emitted_rule_is_a_known_id():
     apps = ["explorer.exe", "msmpeng.exe", "narrator.exe", "keepass.exe",
             "system", "ghost.exe"]
