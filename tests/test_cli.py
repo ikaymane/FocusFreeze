@@ -114,3 +114,29 @@ def test_find_pids_by_exe_finds_self():
 def test_freeze_unknown_exe_fails_cleanly(actuator, capsys):
     assert cli.main(["freeze", "definitely-not-a-real-app-xyz.exe"]) == 1
     assert "no live" in capsys.readouterr().err
+
+
+def test_freeze_without_policy_refuses(actuator, capsys):
+    import argparse
+    args = argparse.Namespace(pids=[1], app="x.exe", exe=None, session="")
+    assert cli.cmd_freeze(args, actuator, policy=None) == 2
+    assert "refusing" in capsys.readouterr().err
+    assert actuator.freeze_calls == []
+
+
+def test_main_freeze_wires_real_policy_by_default(actuator, capsys):
+    assert cli.main(["freeze", "--pids", "1", "--app", "explorer.exe"]) == 1
+    err = capsys.readouterr().err
+    assert "policy refused" in err and "system_process" in err
+    assert actuator.freeze_calls == []
+
+
+def test_main_freeze_honors_session_never_freeze(actuator, capsys, monkeypatch):
+    from freezer.contracts import FocusSession
+    session = FocusSession(name="thesis", task="t", keep_rules=[],
+                           never_freeze=["victim.exe"])
+    monkeypatch.setattr(cli.sessions, "get", lambda name: session)
+    assert cli.main(["freeze", "--pids", "1", "--app", "victim.exe",
+                     "--session", "thesis"]) == 1
+    assert "user_never_freeze" in capsys.readouterr().err
+    assert actuator.freeze_calls == []
