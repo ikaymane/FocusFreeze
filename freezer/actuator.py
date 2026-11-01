@@ -61,6 +61,33 @@ SYSTEM_EXES = frozenset({
 })
 
 
+class AdminRefusal(Exception):
+    """Raised when Focus Freeze refuses to start elevated (T8)."""
+
+
+def is_elevated() -> bool:
+    """True when this process runs elevated (admin/root)."""
+    if os.name == "nt":
+        import ctypes
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except OSError:
+            return True  # fail closed: cannot tell, assume the worst
+    return os.geteuid() == 0
+
+
+def ensure_not_elevated() -> None:
+    """Refuse to start elevated (T8): an admin agent could suspend anything.
+
+    Phase 2 calls this first in the entry point; it exits with the message.
+    """
+    if is_elevated():
+        raise AdminRefusal(
+            "Focus Freeze refuses to run as administrator: suspending "
+            "processes needs no admin rights, and an elevated freezer could "
+            "suspend anything on the machine. Re-run as a normal user.")
+
+
 class FreezeError(Exception):
     """One app could not be (fully) frozen. entry is None on clean rollback."""
 

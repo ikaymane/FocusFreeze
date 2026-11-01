@@ -242,6 +242,18 @@ def test_partial_freeze_rolls_back_and_resumes(live_pair):
     assert _ticks_advancing(marker_a) and _ticks_advancing(marker_b)
 
 
+def test_unelevated_process_passes_check_and_freezes(live_app):
+    """Live T8 companion: this unelevated process passes, freeze works."""
+    from freezer.actuator import ensure_not_elevated, is_elevated
+    assert is_elevated() is False  # premise: the suite runs unelevated
+    assert ensure_not_elevated() is None
+    proc, marker = live_app
+    entry = RealActuator().freeze(snap_for(proc.pid), "audit")
+    assert [p.pid for p in entry.procs] == [proc.pid]
+    assert RealActuator().thaw_all() == ["tickchild.exe"]
+    assert _ticks_advancing(marker)
+
+
 def test_pre_killed_child_narrowed_out_of_entry(live_pair):
     """A child dead before freeze is skipped and left out of the entry."""
     (proc_a, marker_a), (proc_b, _marker_b) = live_pair

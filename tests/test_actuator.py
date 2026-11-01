@@ -5,7 +5,8 @@ import os
 import pytest
 
 from freezer import ledger as ledger_mod
-from freezer.actuator import FreezeError, ProcInfo, RealActuator, WindowsOs
+from freezer.actuator import AdminRefusal, FreezeError, ProcInfo, RealActuator, WindowsOs
+from freezer.actuator import ensure_not_elevated, is_elevated
 from freezer.contracts import AppSnapshot, ProcRef
 from freezer.ledger import Ledger, LedgerTampered
 
@@ -321,3 +322,23 @@ def test_thaw_all_prefers_mru_when_snapshots_given():
              AppSnapshot("new.exe", "new", [], [], 0.0, 1.0, False, False, False, False)]
     assert act.thaw_all(snaps) == ["new.exe", "old.exe"]
     assert act.last_report is not None and act.last_report.app_ids == ["new.exe", "old.exe"]
+
+
+def test_ensure_not_elevated_passes_unelevated(monkeypatch):
+    from freezer import actuator as act_mod
+    monkeypatch.setattr(act_mod, "is_elevated", lambda: False)
+    assert act_mod.ensure_not_elevated() is None
+
+
+def test_ensure_not_elevated_refuses_admin(monkeypatch):
+    from freezer import actuator as act_mod
+    monkeypatch.setattr(act_mod, "is_elevated", lambda: True)
+    with pytest.raises(AdminRefusal, match="administrator"):
+        act_mod.ensure_not_elevated()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="IsUserAnAdmin is Windows-only")
+def test_is_elevated_matches_windows_admin_check():
+    import ctypes
+    assert is_elevated() == bool(ctypes.windll.shell32.IsUserAnAdmin())
+    ensure_not_elevated()  # raises iff this suite runs elevated (T8 premise)
