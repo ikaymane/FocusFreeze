@@ -22,6 +22,16 @@ pytestmark = pytest.mark.skipif(os.name != "nt", reason="needs Windows suspend")
 CHILD_TICK_S = 0.2
 
 
+class FakeSensor:
+    """Fixed snapshot list for agent-level tests (no OS processes touched)."""
+
+    def __init__(self, snaps):
+        self._snaps = snaps
+
+    def snapshot(self):
+        return list(self._snaps)
+
+
 @pytest.fixture()
 def live_app(tmp_path):
     """A real child writing timestamps to a file; terminated on teardown."""
@@ -266,6 +276,47 @@ def test_freeze_of_exited_app_fails_with_empty_ledger(live_app):
             AppSnapshot("tickchild.exe", "tickchild", [ProcRef(proc.pid, ctime)],
                         [], 10.0, 3600.0, False, False, False, False), "audit")
     assert RealActuator().frozen() == []
+
+
+def test_agent_freezes_rest_when_one_app_rolls_back(live_pair):
+    """Agent level, real actuator: A fails mid-freeze and rolls back, B stays frozen."""
+    from freezer.agent import FocusAgent
+    from freezer.contracts import PolicyResult
+    from tests.test_planner import FakeClient, all_decisions, call, reply
+
+    (proc_a, marker_a), (proc_b, marker_b) = live_pair
+    real_os = WindowsOs()
+    orig_trim = real_os.trim
+    state = {"done": False}
+
+    def fail_once(pid):
+        if pid == proc_a.pid and not state["done"]:
+            state["done"] = True
+            raise OSError("injected trim failure")
+        return orig_trim(pid)
+
+    real_os.trim = fail_once  # instance shadow; suspend/resume stay real
+    snaps = [
+        snap_for(proc_a.pid, "a.exe"),
+        snap_for(proc_b.pid, "b.exe"),
+    ]
+    act = RealActuator(os_layer=real_os)
+    agent = FocusAgent(FakeSensor(snaps),
+                       lambda ids, s: PolicyResult(allowed=list(ids)),
+                       act, lambda p: [d.app_id for d in p.to_freeze],
+                       client=FakeClient(reply(call(
+                           "freeze_apps",
+                           all_decisions(snaps, {"a.exe", "b.exe"})))))
+    try:
+        out = agent.focus("testing rollback isolation")
+        assert out.failed == ["a.exe"]
+        assert [e.app_id for e in out.frozen] == ["b.exe"]
+        assert set(Ledger().load()) == {"b.exe"}  # A rolled back, no ghost
+        assert _ticks_advancing(marker_a)  # A resumed by rollback
+        assert _ticks_stalled(marker_b)  # B still frozen
+    finally:
+        act.thaw_all()
+    assert _ticks_advancing(marker_b)
 
 
 def test_pre_killed_child_narrowed_out_of_entry(live_pair):
