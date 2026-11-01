@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 class ThawAll(Protocol):
     def thaw_all(self) -> list[str]: ...
+    def frozen(self) -> list: ...
 
 
 def heartbeat_path() -> Path:
@@ -53,10 +54,22 @@ def check(actuator: ThawAll, *, max_age_s: float = 15.0,
           clock: Callable[[], float] = time.time) -> bool:
     """Thaw everything if the agent looks dead. Returns True if it thawed."""
     data = read_beat()
-    if data is None:
-        return False  # agent never started: nothing to rescue
+    now = clock()
+    if data is None or data[1] > now:
+        # No heartbeat, or one from the future (clock skew): only safe to
+        # ignore when nothing is frozen. A non-empty ledger with no valid
+        # heartbeat means a crash before the first beat, a deleted heartbeat
+        # file, or skew — thaw, don't strand.
+        frozen = actuator.frozen()
+        if not frozen:
+            return False
+        log.warning("watchdog: no valid heartbeat with %d frozen app(s), thawing",
+                    len(frozen))
+        actuator.thaw_all()
+        return True
+
     pid, ts = data
-    if clock() - ts <= max_age_s:
+    if now - ts <= max_age_s:
         return False
     thawed = actuator.thaw_all()
     log.warning("watchdog: agent pid=%d silent for %.0fs, thawed %d app(s)",

@@ -45,6 +45,32 @@ def test_missing_heartbeat_does_nothing():
     assert watchdog.check(CountingActuator()) is False
 
 
+def _freeze_one(act):
+    from freezer.contracts import AppSnapshot, ProcRef
+    act.freeze(AppSnapshot("x.exe", "x", [ProcRef(1, 2.0)], [], 1.0, 0.0,
+                           False, False, False, False), "")
+    return act
+
+
+def test_missing_heartbeat_with_frozen_apps_thaws():
+    watchdog.heartbeat_path().unlink(missing_ok=True)
+    act = _freeze_one(CountingActuator())
+    assert watchdog.check(act) is True
+    assert act.thaw_all_calls == 1
+
+
+def test_future_heartbeat_with_frozen_apps_thaws():
+    act = _freeze_one(CountingActuator())
+    write_beat(1234, time.time() + 3600)
+    assert watchdog.check(act) is True
+    assert act.thaw_all_calls == 1
+
+
+def test_future_heartbeat_empty_ledger_ignored():
+    write_beat(1234, time.time() + 3600)
+    assert watchdog.check(CountingActuator()) is False
+
+
 def test_run_watchdog_checks_once_then_stops():
     write_beat(1234, time.time() - 100)
     act = CountingActuator()
