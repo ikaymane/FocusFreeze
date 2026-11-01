@@ -213,15 +213,19 @@ def load_key() -> bytes:
             return _dpapi_unprotect(blob)
         return blob  # non-Windows dev fallback: raw key file, mode 0600
     key = os.urandom(_KEY_BYTES)
+    # Atomic like the ledger itself: a torn key write used to wedge every
+    # future thaw on an unreadable key.
+    tmp = p.with_name(p.name + ".tmp")
     p.parent.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        p.write_bytes(_dpapi_protect(key))
+        tmp.write_bytes(_dpapi_protect(key))
     else:
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             os.write(fd, key)
         finally:
             os.close(fd)
+    os.replace(tmp, p)
     return key
 
 
@@ -231,7 +235,11 @@ def _encode(entries: dict[str, LedgerEntry]) -> bytes:
     body = {"v": LEDGER_VERSION,
             "entries": [asdict(e) for e in entries.values()]}
     raw = json.dumps(body, sort_keys=True).encode("utf-8")
-    tag = hmac.new(load_key(), raw, hashlib.sha256).hexdigest()
+    try:
+        key = load_key()
+    except OSError as e:
+        raise LedgerTampered(f"cannot sign ledger, key unreadable: {e}")
+    tag = hmac.new(key, raw, hashlib.sha256).hexdigest()
     return json.dumps({**body, "hmac": tag}, indent=1).encode("utf-8")
 
 
@@ -263,7 +271,17 @@ def _decode(data: bytes) -> tuple[dict[str, LedgerEntry], bool]:
             return {}, False
         body = {k: v for k, v in doc.items() if k != "hmac"}
         raw = json.dumps(body, sort_keys=True).encode("utf-8")
-        if not hmac.compare_digest(tag, hmac.new(load_key(), raw, hashlib.sha256).hexdigest()):
+        try:
+            key = load_key()
+        except OSError:
+            # Corrupt key: thaw path must still work, so return what parses
+            # and let the tamper flag refuse new freezes.
+            log.error("ledger_key_unreadable: %s corrupt, entering tamper mode", key_path())
+            try:
+                return _parse_entries(doc), False
+            except (KeyError, TypeError):
+                return {}, False
+        if not hmac.compare_digest(tag, hmac.new(key, raw, hashlib.sha256).hexdigest()):
             log.error("ledger_tampered: HMAC mismatch on %s", ledger_path())
             try:
                 return _parse_entries(doc), False
@@ -416,6 +434,12 @@ class Ledger:
         thawing is always safe, and entries are re-verified (PID+ctime) on
         every thaw, so a re-signed leftover cannot trick a future resume."""
         was_tampered = self._tampered
-        self._mutate(lambda cur: (cur.clear(), cur.update(entries)), thaw_path=True)
+        try:
+            self._mutate(lambda cur: (cur.clear(), cur.update(entries)), thaw_path=True)
+        except LedgerTampered:
+            # Key unreadable mid-thaw: processes are already resumed, so keep
+            # the old file and stay in tamper mode instead of failing the thaw.
+            log.error("ledger_key_unreadable: thawed but could not re-sign ledger")
+            return
         if was_tampered:
             log.warning("ledger_tampered: thaw rewrote the ledger, clearing tamper flag")

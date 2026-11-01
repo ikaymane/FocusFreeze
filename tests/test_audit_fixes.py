@@ -15,7 +15,7 @@ import pytest
 from freezer.actuator import RealActuator, WindowsOs
 from freezer.contracts import AppSnapshot, LedgerEntry, ProcRef
 from freezer.cost import home
-from freezer.ledger import Ledger, LedgerTampered, _union, ledger_path
+from freezer.ledger import Ledger, LedgerTampered, _decode, _union, key_path, ledger_path
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="needs Windows suspend")
 
@@ -136,3 +136,36 @@ def test_save_thawed_may_shrink_backup():
     assert led.load() == {}
     assert Ledger(led._backup_path()).load() == {}
     assert home().exists()
+
+
+# ---- item 2: corrupt ledger.key --------------------------------------------------
+
+def test_corrupt_key_thaw_still_works_but_freeze_refused(live_app):
+    """Real suspend + trashed key file: thaw_all still resumes, freeze refused."""
+    proc, marker = live_app
+    RealActuator().freeze(snap_for(proc.pid), "audit")
+    assert _ticks_stalled(marker)
+
+    # Crash point: a torn (old non-atomic) key write leaves garbage behind.
+    key_path().write_bytes(b"\x00" * 16)
+
+    thawed = RealActuator().thaw_all()
+    assert thawed == ["tickchild.exe"]
+    assert proc.poll() is None
+    assert _ticks_advancing(marker)
+    with pytest.raises(LedgerTampered):
+        RealActuator().freeze(snap_for(proc.pid), "audit")
+
+
+def test_decode_with_corrupt_key_returns_tamper():
+    led = Ledger()
+    led.add(_entry("a.exe"))
+    raw = ledger_path().read_bytes()
+    key_path().write_bytes(b"not a dpapi blob")
+    entries, ok = _decode(raw)
+    assert ok is False
+    assert set(entries) == {"a.exe"}
+    led2 = Ledger()
+    assert led2.tampered is False  # flag is per-read, set by load()
+    assert set(led2.load()) == {"a.exe"}
+    assert led2.tampered is True
