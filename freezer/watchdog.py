@@ -78,6 +78,56 @@ def run_watchdog(actuator: ThawAll, *, interval_s: float = 5.0, max_age_s: float
         time.sleep(interval_s)
 
 
+class Heartbeat:
+    """Background beat() ticker for the agent process lifetime.
+
+    Beats used to happen only inside focus/on_pressure/done, so 15 s idle or
+    an open consent card looked dead to the watchdog. Phase 2 starts one of
+    these with the entry point and stops it on exit.
+    """
+
+    def __init__(self, interval_s: float = 5.0,
+                 clock: Callable[[], float] = time.time) -> None:
+        self._interval = interval_s
+        self._clock = clock
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        if self.running:
+            raise RuntimeError("heartbeat already started")
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name="focusfreeze-heartbeat")
+        self._thread.start()
+        try:
+            beat(self._clock)  # no gap before the first tick
+        except Exception:  # noqa: BLE001 - a locked disk at startup must not kill the agent
+            log.exception("heartbeat initial beat failed, thread keeps trying")
+
+    def stop(self, timeout_s: float = 10.0) -> None:
+        t = self._thread
+        self._thread = None
+        if t is None:
+            return
+        self._stop.set()
+        t.join(timeout_s)
+        if t.is_alive():
+            raise TimeoutError("heartbeat thread did not stop")
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                beat(self._clock)
+            except Exception:  # noqa: BLE001 - a failed beat must not end beating
+                log.exception("heartbeat beat failed")
+            self._stop.wait(self._interval)
+
+
 class PanicKey:
     """System-wide Ctrl+Alt+Shift+F that runs a callback (thaw_all)."""
 

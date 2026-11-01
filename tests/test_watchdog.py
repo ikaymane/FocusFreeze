@@ -8,7 +8,7 @@ import pytest
 
 from freezer import watchdog
 from freezer.mocks import MockActuator
-from freezer.watchdog import PanicKey
+from freezer.watchdog import Heartbeat, PanicKey
 
 
 class CountingActuator(MockActuator):
@@ -75,6 +75,33 @@ def test_panic_key_lifecycle():
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only hotkey")
+def test_heartbeat_advances_while_running():
+    hb = Heartbeat(interval_s=0.05)
+    hb.start()
+    try:
+        assert hb.running
+        first = watchdog.read_beat()
+        assert first is not None and first[0] == os.getpid()
+        deadline = time.time() + 5
+        while watchdog.read_beat()[1] <= first[1]:
+            assert time.time() < deadline, "heartbeat never ticked again"
+            time.sleep(0.05)
+    finally:
+        hb.stop()
+    assert not hb.running
+
+
+def test_heartbeat_double_start_raises_and_stop_is_idempotent():
+    hb = Heartbeat(interval_s=60)
+    hb.start()
+    try:
+        with pytest.raises(RuntimeError):
+            hb.start()
+    finally:
+        hb.stop()
+    hb.stop()  # stopping a stopped heartbeat is fine
+
+
 def test_panic_key_dispatches_to_callback():
     import ctypes
 
