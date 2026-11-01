@@ -212,6 +212,11 @@ def test_cap_empty_list():
     assert v.allowed == [] and v.blocked == []
 
 
+def test_work_tools_list_matches_agent_stopgap():
+    from freezer import agent, policy
+    assert policy.WORK_TOOLS_NO_AUTO == agent.WORK_TOOLS_NO_AUTO
+
+
 def test_cap_applies_after_deny_rules():
     snaps = [_plain(i) for i in range(10)] + [snap("explorer.exe")]
     v = filter([s.app_id for s in snaps], snaps, self_pids={999999})

@@ -45,6 +45,13 @@ PROTECTED = frozenset({
 
 # Every rule id filter() can emit. The consent card needs a BLOCK_REASONS
 # entry for each one (see freezer.agent).
+# Terminals and IDEs that must always go through a consent card, never
+# auto-freeze: killing one can lose running work the sensor cannot see, and
+# their titles are attacker-writable. C imports this after the merge; the
+# agent loop keeps using its own copy until then (no behavior change here).
+WORK_TOOLS_NO_AUTO = frozenset({"windowsterminal.exe", "code.exe", "studio64.exe"})
+
+
 RULES = (
     "unknown_app", "self", "system_process", "security_software",
     "protected_process", "accessibility", "password_manager",
