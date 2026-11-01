@@ -25,7 +25,9 @@ def snap(app_id, **kw):
 def verdict(app_id, **kw):
     never = kw.pop("never_freeze", ())
     pids = kw.pop("self_pids", {999999})
-    return filter([app_id], [snap(app_id, **kw)], never_freeze=never,
+    # A filler snapshot keeps the 80% cap (floor) off this single verdict.
+    snaps = [snap(app_id, **kw), snap("filler.exe")]
+    return filter([app_id], snaps, never_freeze=never,
                   self_pids=pids)
 
 
@@ -178,3 +180,43 @@ def test_planner_cannot_bypass_policy_on_guardian_path():
         "msmpeng.exe": "security_software"}
     assert all(a != "explorer.exe" and a != "msmpeng.exe"
                for _, a in act.log)
+
+
+def _plain(i):
+    return snap(f"app{i}.exe")
+
+
+def test_cap_allows_eight_of_ten():
+    snaps = [_plain(i) for i in range(10)]
+    v = filter([s.app_id for s in snaps], snaps, self_pids={999999})
+    assert v.allowed == [s.app_id for s in snaps[:8]]
+    assert [(b.app_id, b.rule) for b in v.blocked] == [
+        (s.app_id, "too_many") for s in snaps[8:]]
+
+
+def test_cap_five_apps():
+    snaps = [_plain(i) for i in range(5)]
+    v = filter([s.app_id for s in snaps], snaps, self_pids={999999})
+    assert len(v.allowed) == 4 and len(v.blocked) == 1
+    assert v.blocked[0].rule == "too_many"
+
+
+def test_cap_single_app_blocked():
+    v = filter(["solo.exe"], [snap("solo.exe")], self_pids={999999})
+    assert v.allowed == []
+    assert [(b.app_id, b.rule) for b in v.blocked] == [("solo.exe", "too_many")]
+
+
+def test_cap_empty_list():
+    v = filter([], [], self_pids={999999})
+    assert v.allowed == [] and v.blocked == []
+
+
+def test_cap_applies_after_deny_rules():
+    snaps = [_plain(i) for i in range(10)] + [snap("explorer.exe")]
+    v = filter([s.app_id for s in snaps], snaps, self_pids={999999})
+    assert [b.app_id for b in v.blocked
+            if b.rule == "system_process"] == ["explorer.exe"]
+    assert len(v.allowed) == 8  # floor(0.8 * 11); refused apps use no budget
+    assert [b.rule for b in v.blocked
+            if b.app_id != "explorer.exe"] == ["too_many"] * 2

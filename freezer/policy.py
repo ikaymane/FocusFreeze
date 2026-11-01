@@ -49,6 +49,7 @@ RULES = (
     "unknown_app", "self", "system_process", "security_software",
     "protected_process", "accessibility", "password_manager",
     "user_never_freeze", "elevated", "foreground", "plays_audio",
+    "too_many",
 )
 
 
@@ -88,6 +89,9 @@ def filter(freeze_ids: Iterable[str], snapshots: Iterable[AppSnapshot], *,
     never_freeze: app_ids (any case) the user protected in the active session.
     self_pids: PIDs that count as "us" — agent, watchdog, parent shell.
     Defaults to just this process, matching the old mock behavior.
+    Cap: at most floor(0.8 * visible apps) may freeze per call (T6); the
+    deny rules run first, so refused apps never consume cap budget, and the
+    spillover drops from the end of the allowed list as "too_many".
     """
     by_id = {s.app_id.lower(): s for s in snapshots}
     denied = {str(a).lower() for a in never_freeze}
@@ -100,6 +104,11 @@ def filter(freeze_ids: Iterable[str], snapshots: Iterable[AppSnapshot], *,
             result.allowed.append(app_id)
         else:
             result.blocked.append(Blocked(app_id, rule))
+    cap = int(len(by_id) * 0.8)
+    if len(result.allowed) > cap:
+        for app_id in result.allowed[cap:]:
+            result.blocked.append(Blocked(app_id, "too_many"))
+        del result.allowed[cap:]
     return result
 
 

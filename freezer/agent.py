@@ -61,6 +61,7 @@ BLOCK_REASONS = {
     "elevated": "Runs as administrator", "self": "Focus Freeze itself",
     "unknown_app": "Closed or not found",
     "rate_limited": "Too many freezes in a minute",
+    "too_many": "Too many at once",
 }
 POLICY_SILENT = "Kept for safety"
 
