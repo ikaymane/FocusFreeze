@@ -254,6 +254,20 @@ def test_unelevated_process_passes_check_and_freezes(live_app):
     assert _ticks_advancing(marker)
 
 
+def test_freeze_of_exited_app_fails_with_empty_ledger(live_app):
+    """Live 8a: freezing an already-dead child fails, recording no ghost."""
+    from freezer.actuator import FreezeError
+    proc, _marker = live_app
+    ctime = WindowsOs().resolve(proc.pid).create_time
+    proc.terminate()
+    proc.wait(timeout=5)
+    with pytest.raises(FreezeError, match="nothing suspended"):
+        RealActuator().freeze(
+            AppSnapshot("tickchild.exe", "tickchild", [ProcRef(proc.pid, ctime)],
+                        [], 10.0, 3600.0, False, False, False, False), "audit")
+    assert RealActuator().frozen() == []
+
+
 def test_pre_killed_child_narrowed_out_of_entry(live_pair):
     """A child dead before freeze is skipped and left out of the entry."""
     (proc_a, marker_a), (proc_b, _marker_b) = live_pair

@@ -61,6 +61,13 @@ SYSTEM_EXES = frozenset({
 })
 
 
+STATUS_PROCESS_IS_TERMINATING = 0xC000010A
+
+
+class ProcessTerminating(OSError):
+    """The OS reports STATUS_PROCESS_IS_TERMINATING: gone for our purposes."""
+
+
 class AdminRefusal(Exception):
     """Raised when Focus Freeze refuses to start elevated (T8)."""
 
@@ -273,6 +280,8 @@ class WindowsOs:
             if not _ctimes_match(actual, expected_ctime):
                 return False  # PID reused: this handle pins the stranger, suspend nothing
             status = self._ntdll.NtSuspendProcess(h)
+            if status == STATUS_PROCESS_IS_TERMINATING:
+                raise ProcessTerminating(f"NtSuspendProcess: pid {pid} is terminating")
             if status != 0:
                 raise OSError(f"NtSuspendProcess failed: status 0x{status & 0xFFFFFFFF:08X}")
             return True
@@ -283,6 +292,8 @@ class WindowsOs:
         h = self._open(pid, self.PROCESS_SUSPEND_RESUME)
         try:
             status = self._ntdll.NtResumeProcess(h)
+            if status == STATUS_PROCESS_IS_TERMINATING:
+                raise ProcessTerminating(f"NtResumeProcess: pid {pid} is terminating")
             if status != 0:
                 raise OSError(f"NtResumeProcess failed: status 0x{status & 0xFFFFFFFF:08X}")
         finally:
@@ -423,11 +434,20 @@ class RealActuator:
                     continue
                 suspended.append(pref)  # suspended: trim failure still rolls back
                 self._os.trim(pref.pid)
+            except ProcessTerminating:
+                skipped[pref.pid] = "terminating"
             except OSError as e:
                 failures[pref.pid] = str(e)
         if failures:
             return self._abort_partial(app.app_id, entry, before_mb, suspended,
                                        failures, skipped)
+        if not suspended and not failures:
+            # Nothing was suspended and nothing failed: every proc was
+            # skipped (dead, system, reused). Recording a ghost entry would
+            # report a freeze that never happened and block refreezing.
+            self._ledger.remove(app.app_id)
+            raise FreezeError(app.app_id, "nothing suspended, all processes skipped",
+                              failures=failures, skipped=skipped, entry=None)
         entry.procs = suspended  # the ledger records only what we suspended
         entry.freed_mb = max(before_mb - self._ws_total(app.procs), 0.0)
         self._ledger.update(entry)
@@ -485,6 +505,8 @@ class RealActuator:
             try:
                 self._os.resume(pref.pid)
                 resumed_pids.add(pref.pid)
+            except ProcessTerminating:
+                continue  # terminating: dead for our purposes, prune it
             except OSError as e:
                 log.warning("thaw: resume failed on %s pid=%d (%s), keeping entry",
                             entry.app_id, pref.pid, e)

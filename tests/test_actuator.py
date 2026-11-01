@@ -5,7 +5,7 @@ import os
 import pytest
 
 from freezer import ledger as ledger_mod
-from freezer.actuator import AdminRefusal, FreezeError, ProcInfo, RealActuator, WindowsOs
+from freezer.actuator import AdminRefusal, FreezeError, ProcInfo, ProcessTerminating, RealActuator, WindowsOs
 from freezer.actuator import ensure_not_elevated, is_elevated
 from freezer.contracts import AppSnapshot, ProcRef
 from freezer.ledger import Ledger, LedgerTampered
@@ -26,6 +26,7 @@ class FakeOs:
         self.suspended, self.resumed, self.trimmed = [], [], []
         self.minimized, self.restored = [], []
         self.denied = set()  # live but unreachable, like protected processes
+        self.terminating = set()  # suspend/resume report 0xC000010A for these
         self.fail_suspend, self.fail_resume, self.fail_trim = set(), set(), set()
 
     def resolve(self, pid):
@@ -48,6 +49,8 @@ class FakeOs:
             raise OSError("access denied")
         if abs(p.ctime - expected_ctime) > 2.0:
             return False
+        if pid in self.terminating:
+            raise ProcessTerminating("terminating")
         if pid in self.fail_suspend:
             raise OSError("access denied")
         p.suspended = True
@@ -55,6 +58,8 @@ class FakeOs:
         return True
 
     def resume(self, pid):
+        if pid in self.terminating:
+            raise ProcessTerminating("terminating")
         if pid in self.fail_resume:
             raise OSError("access denied")
         self.resumed.append(pid)
@@ -127,12 +132,14 @@ def test_freeze_never_suspends_itself():
     assert fake.suspended == [11]
 
 
-def test_freeze_never_drops_entry_on_pid_reuse():
+def test_freeze_fails_when_pid_reuse_leaves_nothing_suspended():
+    # Audit item 8a: the stranger stays untouched, no ghost entry remains.
     fake = FakeOs([FakeProc(11, ctime=999.0)])  # PID reused since the snapshot
     act = RealActuator(os_layer=fake, ledger=Ledger())
-    act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
+    with pytest.raises(FreezeError, match="nothing suspended"):
+        act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
     assert fake.suspended == []  # stranger process untouched
-    assert Ledger().load()["a.exe"].procs == []  # audit item 5: nothing suspended (8a fails this)
+    assert Ledger().load() == {}
 
 
 def test_freeze_twice_raises_and_suspends_once():
@@ -303,11 +310,13 @@ def test_thaw_keeps_unreachable_live_process_listed():
     assert [p.pid for p in Ledger().load()["a.exe"].procs] == [11]
 
 
-def test_freeze_skips_unnameable_exe():
+def test_freeze_fails_when_nothing_suspendable():
     fake = FakeOs([FakeProc(11, exe="")])  # fail closed: never suspend the unknown
     act = RealActuator(os_layer=fake, ledger=Ledger())
-    act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
+    with pytest.raises(FreezeError, match="nothing suspended"):
+        act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
     assert fake.suspended == []
+    assert Ledger().load() == {}
 
 
 def test_thaw_all_prefers_mru_when_snapshots_given():
@@ -342,3 +351,25 @@ def test_is_elevated_matches_windows_admin_check():
     import ctypes
     assert is_elevated() == bool(ctypes.windll.shell32.IsUserAnAdmin())
     ensure_not_elevated()  # raises iff this suite runs elevated (T8 premise)
+
+
+def test_terminating_process_skipped_and_freeze_fails_empty():
+    # Audit item 8a: 0xC000010A on suspend counts as dead, and with nothing
+    # suspended the freeze fails instead of recording a ghost entry.
+    fake = FakeOs([FakeProc(11)])
+    fake.terminating.add(11)
+    act = RealActuator(os_layer=fake, ledger=Ledger())
+    with pytest.raises(FreezeError, match="nothing suspended"):
+        act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
+    assert fake.suspended == []
+    assert Ledger().load() == {}
+
+
+def test_terminating_process_pruned_on_thaw():
+    fake = FakeOs([FakeProc(11), FakeProc(12)])
+    act = RealActuator(os_layer=fake, ledger=Ledger())
+    act.freeze(snap("a.exe", ProcRef(11, 100.0), ProcRef(12, 100.0)), "s")
+    fake.terminating.add(12)  # exits while frozen; resume reports 0xC000010A
+    act.thaw("a.exe")
+    assert fake.resumed == [11]
+    assert Ledger().load() == {}
