@@ -6,7 +6,8 @@ B-cover implementation of ``plans/roles/B-os-data-security.md`` step 1
 Grouping: top-level visible windows (``EnumWindows`` +
 ``GetWindowThreadProcessId``) give the owning process; each app is the
 owner's exe (lowercase ``app_id``) plus all PIDs ever seen for it, and the
-freeze tree is the owner plus ``psutil`` recursive children. Only processes
+freeze tree is the owner plus ``psutil`` recursive children, minus any child
+that is another windowed app and everything under it (see :func:`_prune`). Only processes
 alive at sampling time are emitted; a PID that dies mid-sample is skipped,
 never guessed (sampling instant documented for the U1 audit gap).
 
@@ -100,6 +101,33 @@ def _tree(pid: int) -> list[psutil.Process]:
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
         pass
     return [p for p in procs if _live(p)]
+
+
+def _prune(exe: str, procs: list, owners: set[str]) -> list:
+    """Drop processes that belong to another windowed app, and everything under them.
+
+    A launcher's children are their own apps (explorer -> code.exe, a chat app
+    -> chrome.exe): freezing the launcher must never suspend them.
+    """
+    names = {p.pid: _proc_name(p.pid) for p in procs}
+    cut = {pid for pid, name in names.items() if name in owners and name != exe}
+    if not cut:
+        return procs
+    by_pid = {p.pid: p for p in procs}
+
+    def under_cut(p) -> bool:
+        pid, seen = p.pid, set()
+        while pid in by_pid and pid not in seen:
+            if pid in cut:
+                return True
+            seen.add(pid)
+            try:
+                pid = by_pid[pid].ppid()
+            except (psutil.Error, AttributeError):
+                return False
+        return False
+
+    return [p for p in procs if not under_cut(p)]
 
 
 def _working_set_mb(procs: list[psutil.Process]) -> float:
@@ -235,7 +263,7 @@ class RealSensor:
             for pid in g["pids"]:
                 for proc in _tree(pid):
                     tree.setdefault(proc.pid, proc)
-            procs = list(tree.values())
+            procs = _prune(exe, list(tree.values()), set(groups))
             if not procs:
                 continue
             refs = []
