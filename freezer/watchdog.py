@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
@@ -31,22 +32,66 @@ def heartbeat_path() -> Path:
     return home() / "heartbeat.json"
 
 
+# A transient AV/indexer lock can hold heartbeat.json on Windows (WinError
+# 32): retry a locked replace briefly instead of losing the beat. The total
+# wait stays far below the 15 s watchdog age and the 5 s beat interval.
+_TMP_COUNTER = itertools.count()
+_BEAT_ATTEMPTS = 5
+_BEAT_RETRY_DELAY_S = 0.02
+_READ_RETRY_DELAY_S = 0.02
+
+
 def beat(clock: Callable[[], float] = time.time) -> None:
-    """Record a heartbeat. The agent calls this every few seconds."""
+    """Record a heartbeat. The agent calls this every few seconds.
+
+    Never raises for a locked destination: after a few retries the beat is
+    skipped (and logged), so a locked disk degrades to a stale heartbeat
+    instead of killing the caller. A stale or missing heartbeat still
+    triggers the watchdog, so this fails closed.
+    """
     p = heartbeat_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
+    # Unique tmp per call: concurrent beats (Heartbeat thread + a direct
+    # beat() from the agent loop, or two processes sharing FF_HOME) must not
+    # consume each other's tmp file. Atomic replace keeps heartbeat.json whole.
+    tmp = p.with_name(
+        f"heartbeat.{os.getpid()}.{threading.get_ident()}.{next(_TMP_COUNTER)}.tmp")
     tmp.write_text(json.dumps({"pid": os.getpid(), "ts": clock()}), encoding="utf-8")
-    os.replace(tmp, p)
+    for attempt in range(_BEAT_ATTEMPTS):
+        try:
+            os.replace(tmp, p)
+            return
+        except OSError:
+            if attempt + 1 >= _BEAT_ATTEMPTS:
+                log.warning("heartbeat replace failed, skipping beat",
+                            exc_info=True)
+                return
+            time.sleep(_BEAT_RETRY_DELAY_S)
 
 
 def read_beat() -> tuple[int, float] | None:
+    """Return (pid, ts) of the last beat, or None when unreadable.
+
+    Retries once on a transient failure: a single locked read must not look
+    like a missing heartbeat. A genuinely missing file fails twice fast and
+    still returns None, so the watchdog still fires (fail closed).
+    """
     try:
         doc = json.loads(heartbeat_path().read_text(encoding="utf-8"))
         if not isinstance(doc, dict):
             return None
         return int(doc["pid"]), float(doc["ts"])
     except (OSError, ValueError, KeyError, TypeError):
+        # Transient lock (AV/indexer) can fail one read: retry once before
+        # treating the heartbeat as missing (falls through to return None).
+        time.sleep(_READ_RETRY_DELAY_S)
+        try:
+            doc = json.loads(heartbeat_path().read_text(encoding="utf-8"))
+            if not isinstance(doc, dict):
+                return None
+            return int(doc["pid"]), float(doc["ts"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         return None
 
 
