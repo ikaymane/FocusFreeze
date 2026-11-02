@@ -438,3 +438,14 @@ def test_live_parts_are_real_and_never_freeze_us():
         assert verdict.allowed == [] and verdict.blocked[0].rule == "self"
     finally:
         parts["sensor"].tracker.stop()
+
+
+def test_live_exe_names_read_as_app_names_but_ids_stay_exact():
+    from freezer.contracts import AppSnapshot, ProcRef
+    from ui.consent import app_name
+
+    live = AppSnapshot("discord.exe", "discord.exe", [ProcRef(1, 1.0)], [], 1.0, 0.0, False, False, False, False)
+    mock = AppSnapshot("steam.exe", "Steam (library)", [ProcRef(2, 1.0)], [], 1.0, 0.0, False, False, False, False)
+    assert app_name("discord.exe", live) == "Discord"
+    assert app_name("steam.exe", mock) == "Steam (library)"
+    assert app_name("unknown.exe", None) == "unknown.exe"
