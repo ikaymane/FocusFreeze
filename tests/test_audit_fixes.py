@@ -278,10 +278,71 @@ def test_freeze_of_exited_app_fails_with_empty_ledger(live_app):
     assert RealActuator().frozen() == []
 
 
+def _idle_filler(app_id: str) -> AppSnapshot:
+    """Idle app with no live process: pads the sensor world for the 80% cap."""
+    return AppSnapshot(app_id, app_id, [], [], 10.0, 3600.0,
+                       False, False, False, False)
+
+
 def test_agent_freezes_rest_when_one_app_rolls_back(live_pair):
     """Agent level, real actuator: A fails mid-freeze and rolls back, B stays frozen."""
     from freezer.agent import FocusAgent
     from freezer.contracts import PolicyResult
+    from tests.test_planner import FakeClient, all_decisions, call, reply
+
+    (proc_a, marker_a), (proc_b, marker_b) = live_pair
+    real_os = WindowsOs()
+    orig_trim = real_os.trim
+    state = {"done": False}
+
+    def fail_once(pid):
+        if pid == proc_a.pid and not state["done"]:
+            state["done"] = True
+            raise OSError("injected trim failure")
+        return orig_trim(pid)
+
+    real_os.trim = fail_once  # instance shadow; suspend/resume stay real
+    # Fillers pad the sensor world to 5 apps so the 80% per-call cap
+    # (floor(5 * 0.8) = 4) leaves budget to attempt both a.exe and b.exe.
+    # In a 2-app world the cap would be floor(2 * 0.8) = 1 and b.exe would
+    # be skipped as "too_many" before the actuator runs, masking this seam.
+    # Fillers are not in the plan, never frozen, and have no live process.
+    snaps = [
+        snap_for(proc_a.pid, "a.exe"),
+        snap_for(proc_b.pid, "b.exe"),
+        _idle_filler("idle0.exe"),
+        _idle_filler("idle1.exe"),
+        _idle_filler("idle2.exe"),
+    ]
+    act = RealActuator(os_layer=real_os)
+    agent = FocusAgent(FakeSensor(snaps),
+                       lambda ids, s: PolicyResult(allowed=list(ids)),
+                       act, lambda p: [d.app_id for d in p.to_freeze],
+                       client=FakeClient(reply(call(
+                           "freeze_apps",
+                           all_decisions(snaps, {"a.exe", "b.exe"})))))
+    try:
+        out = agent.focus("testing rollback isolation")
+        assert out.failed == ["a.exe"]
+        assert [e.app_id for e in out.frozen] == ["b.exe"]
+        assert set(Ledger().load()) == {"b.exe"}  # A rolled back, no ghost
+        assert {e.app_id for e in act.frozen()} == {"b.exe"}  # fillers never frozen
+        assert _ticks_advancing(marker_a)  # A resumed by rollback
+        assert _ticks_stalled(marker_b)  # B still frozen
+    finally:
+        act.thaw_all()
+    assert _ticks_advancing(marker_b)
+
+
+def test_cap_limits_two_app_world_to_one_attempt(live_pair):
+    """With the real 80% cap policy, a 2-app world attempts at most one app.
+
+    Skipped until freezer.policy (PR #5) exists on this branch. Documents why
+    the rollback seam test above needs its 3 filler apps: without them the cap
+    budget is floor(2 * 0.8) = 1 and b.exe is never attempted.
+    """
+    policy = pytest.importorskip("freezer.policy")
+    from freezer.agent import FocusAgent
     from tests.test_planner import FakeClient, all_decisions, call, reply
 
     (proc_a, marker_a), (proc_b, marker_b) = live_pair
@@ -302,21 +363,22 @@ def test_agent_freezes_rest_when_one_app_rolls_back(live_pair):
     ]
     act = RealActuator(os_layer=real_os)
     agent = FocusAgent(FakeSensor(snaps),
-                       lambda ids, s: PolicyResult(allowed=list(ids)),
+                       lambda ids, s: policy.filter(ids, s),
                        act, lambda p: [d.app_id for d in p.to_freeze],
                        client=FakeClient(reply(call(
                            "freeze_apps",
                            all_decisions(snaps, {"a.exe", "b.exe"})))))
     try:
-        out = agent.focus("testing rollback isolation")
-        assert out.failed == ["a.exe"]
-        assert [e.app_id for e in out.frozen] == ["b.exe"]
-        assert set(Ledger().load()) == {"b.exe"}  # A rolled back, no ghost
-        assert _ticks_advancing(marker_a)  # A resumed by rollback
-        assert _ticks_stalled(marker_b)  # B still frozen
+        out = agent.focus("testing the 80% cap")
+        assert len(out.frozen) + len(out.failed) <= 1  # floor(2 * 0.8) = 1
+        assert "too_many" in {b.rule for b in out.proposal.blocked}
+        assert "b.exe" not in [e.app_id for e in out.frozen]
+        assert "b.exe" not in out.failed  # b.exe never attempted
+        assert Ledger().load() == {}  # the one attempt rolled back, no ghost
+        assert _ticks_advancing(marker_a)
+        assert _ticks_advancing(marker_b)  # never suspended
     finally:
         act.thaw_all()
-    assert _ticks_advancing(marker_b)
 
 
 def test_pre_killed_child_narrowed_out_of_entry(live_pair):
