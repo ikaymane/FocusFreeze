@@ -23,6 +23,7 @@ from typing import Callable, Sequence
 from freezer.actuator import FreezeError, RealActuator, startup_recovery
 from freezer.contracts import AppSnapshot, PolicyResult, ProcRef
 from freezer.ledger import LedgerTampered
+from freezer import audit
 from freezer import sessions
 from freezer.policy import policy_for
 
@@ -153,6 +154,7 @@ def cmd_freeze(args: argparse.Namespace, actuator: RealActuator, policy: Policy 
         if app_id not in verdict.allowed:
             reason = next((b.rule for b in verdict.blocked if b.app_id == app_id), "blocked")
             print(f"ff: policy refused {app_id}: {reason}", file=sys.stderr)
+            audit.log("user", "block", app_id, reason)
             return 1
     try:
         entry = actuator.freeze(snap, args.session or "")
@@ -165,6 +167,7 @@ def cmd_freeze(args: argparse.Namespace, actuator: RealActuator, policy: Policy 
             print(f"ff:   pid {pid}: {reason}", file=sys.stderr)
         return 1
     print(f"froze {entry.app_id}: {len(entry.procs)} procs, {entry.freed_mb:.0f} MB freed")
+    audit.log("user", "freeze", entry.app_id, f"freed {entry.freed_mb:.0f} MB")
     return 0
 
 
@@ -179,6 +182,8 @@ def cmd_thaw(args: argparse.Namespace, actuator: RealActuator) -> int:
             print(f"thawed {len(ids)} apps")
         for app_id in ids:
             print(f"  {app_id}")
+        for app_id in ids:
+            audit.log("user", "thaw", app_id, "thaw all")
         return 0
     # Freeze stores lowered ids: match that spelling first, then verbatim,
     # so `ff thaw Steam.exe` finds what `ff freeze Steam.exe` stored.
@@ -193,8 +198,19 @@ def cmd_thaw(args: argparse.Namespace, actuator: RealActuator) -> int:
     except LedgerTampered as e:
         print(f"ff: {e}", file=sys.stderr)
         return 1
+    audit.log("user", "thaw", target, "thaw one")
     print(f"thawed {target}")
     return 0
+
+
+def cmd_verify_log(args: argparse.Namespace) -> int:
+    del args  # no options yet
+    ok, bad, count = audit.verify()
+    if ok:
+        print(f"audit log ok: {count} entries")
+        return 0
+    print(f"audit log BROKEN at line {bad} ({count} entries)", file=sys.stderr)
+    return 1
 
 
 def cmd_recover(args: argparse.Namespace, actuator: RealActuator) -> int:
@@ -233,6 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     th.add_argument("--all", action="store_true", help="thaw everything in the ledger")
     sub.add_parser("list", help="show frozen apps")
     sub.add_parser("recover", help="resume apps left frozen by a previous run")
+    sub.add_parser("verify-log", help="verify the audit log chain")
     return ap
 
 
@@ -253,6 +270,8 @@ def main(argv: Sequence[str] | None = None, *, policy: Policy = None) -> int:
         return 2
     if args.cmd == "freeze" and policy is None:
         policy = _default_policy(getattr(args, "session", ""))
+    if args.cmd == "verify-log":
+        return cmd_verify_log(args)
     actuator = build_actuator()
     try:
         if args.cmd == "freeze":

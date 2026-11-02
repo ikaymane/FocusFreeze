@@ -31,6 +31,9 @@ from freezer.contracts import (Actuator, AppSnapshot, Blocked, Decision, FocusSe
 from freezer.watchdog import beat
 from freezer.planner import DEFAULT_EFFORT, DEFAULT_MODEL, SKIPPED_REASON, plan
 
+from freezer import audit
+
+
 log = logging.getLogger(__name__)
 
 GUARDIAN_TASK = ("Free up memory. The user's current work is unknown: keep anything that "
@@ -286,6 +289,16 @@ class FocusAgent:
         # persistently failing app backs off instead of retrying forever.
         for _ in frozen + failed:
             self._freeze_times.append(time.time())
+        try:  # the audit trail must never break the loop
+            for b in proposal.blocked:
+                audit.log(proposal.source, "block", b.app_id, b.rule)
+            for e in frozen:
+                audit.log(proposal.source, "freeze", e.app_id,
+                          f"freed {e.freed_mb:.0f} MB")
+            for b in skipped:
+                audit.log(proposal.source, "block", b.app_id, b.rule)
+        except Exception:
+            log.debug("audit log skipped", exc_info=True)
         return Outcome(proposal=proposal, frozen=frozen, failed=failed, skipped=skipped,
                        unticked=[a for a in allowed if a not in approved_set])
 
@@ -327,6 +340,11 @@ class FocusAgent:
         if proposal.plan.question:
             return Outcome(proposal=proposal, question=proposal.plan.question)
         thawed = self._thaw(proposal.thaw)  # bringing an app back needs no consent
+        try:  # the audit trail must never break the loop
+            for app_id in thawed:
+                audit.log("user", "thaw", app_id, "task switch")
+        except Exception:
+            log.debug("audit log skipped", exc_info=True)
         if not proposal.to_freeze:
             return Outcome(proposal=proposal, thawed=thawed)
         approved = self.consent(proposal)
