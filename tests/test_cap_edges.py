@@ -57,8 +57,9 @@ def _agent(snaps, client, actuator=None):
 def test_cap_union_counts_case_insensitively():
     # (a) Ledger holds APP0.EXE uppercase while the snapshot lists app0.exe
     # lowercase plus 9 more apps; 7 more of those are frozen too. Lowercased
-    # union counts 10 distinct apps, already counts 8, budget is 0, so the 3
-    # still-unfrozen apps are all refused as too_many (never silent/failed).
+    # union counts 10 distinct apps, already counts 8, budget is 0, so app8/app9
+    # are refused as too_many; app0.exe is a case-twin of a ledger entry, so it
+    # is reported as duplicate (never silent/failed).
     snaps = [_snap("app%d.exe" % i) for i in range(10)]
     act = MockActuator()
     act.freeze(_snap("APP0.EXE"), "cap")
@@ -77,7 +78,7 @@ def test_cap_union_counts_case_insensitively():
     assert out.failed == []
     assert out.proposal.blocked == []
     assert [(b.app_id, b.rule) for b in out.skipped] == [
-        ("app0.exe", "too_many"),
+        ("app0.exe", "duplicate"),
         ("app8.exe", "too_many"),
         ("app9.exe", "too_many"),
     ]

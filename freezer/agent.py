@@ -65,6 +65,7 @@ BLOCK_REASONS = {
     "unknown_app": "Closed or not found",
     "rate_limited": "Too many freezes in a minute",
     "too_many": "Too many at once",
+    "duplicate": "Already being frozen",
 }
 POLICY_SILENT = "Kept for safety"
 
@@ -209,6 +210,21 @@ class FocusAgent:
         # Rolling rate limit, in plan order: over-limit approvals are reported as
         # skipped, never silently dropped.
         ready = [a for a in ids if a in ok]
+        # Identity dedupe: the sensor can list one app twice under different
+        # case (STEAM.EXE vs Steam.exe), or list a twin of a ledger entry.
+        # The ceiling counts case-insensitively, so freeze only the first
+        # spelling in plan order and report the rest as skipped.
+        already_ids = {e.app_id.lower() for e in self.actuator.frozen()}
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for a in ready:
+            key = a.lower()
+            if key in already_ids or key in seen:
+                skipped.append(Blocked(a, "duplicate"))
+            else:
+                seen.add(key)
+                deduped.append(a)
+        ready = deduped
         now = time.time()
         while self._freeze_times and now - self._freeze_times[0] >= 60:
             self._freeze_times.popleft()
@@ -222,9 +238,8 @@ class FocusAgent:
         # ledger, so repeated triggers could otherwise freeze the whole desktop.
         # Distinct app_ids, case-insensitive: a frozen app that is still listed
         # in the fresh snapshot counts once.
-        already = {e.app_id.lower() for e in self.actuator.frozen()}
-        total = {a.lower() for a in by_id} | already
-        budget = max(0, int(len(total) * MAX_FROZEN_FRACTION) - len(already))
+        total = {a.lower() for a in by_id} | already_ids
+        budget = max(0, int(len(total) * MAX_FROZEN_FRACTION) - len(already_ids))
         within = attempt[:budget]
         skipped += [Blocked(a, "too_many") for a in attempt[budget:]]
         frozen, failed = [], []
