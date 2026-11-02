@@ -1,5 +1,7 @@
 # Focus Freeze: video script (draft 1)
 
+**Superseded for filming by [shot-list.md](shot-list.md).** Since this draft: the rig is 4 GB, not 8 GB; Defender has no window, so the card can never show it as blocked; the watchdog line is now true with `python -m ui.app --live`.
+
 Limit: 3:00. Team: mark anything that looks weak. Film only on the 4 GB machine, with real parts. The gauge's SIMULATED label must be gone from every shot.
 Numbers in [brackets] are targets. Replace them with what the rig measures, and never narrate a number we did not measure.
 
