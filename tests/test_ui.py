@@ -417,3 +417,24 @@ def test_overlay_never_catches_input_and_cleans_up(qapp):
     o.play_thaw(QPointF(400, 300), QPointF(700, 50), "2.6 GB")
     o.grab()
     wait_until(qapp, lambda: not o.mode, timeout=8)
+
+
+def test_live_parts_are_real_and_never_freeze_us():
+    """--live swaps every mock: real sensor, policy and actuator, default model."""
+    import os
+
+    from freezer.actuator import RealActuator
+    from freezer.contracts import AppSnapshot, ProcRef
+    from freezer.sensor import RealSensor
+    from ui.app import make_parts
+
+    parts = make_parts(True, live=True)
+    try:
+        assert isinstance(parts["sensor"], RealSensor) and isinstance(parts["actuator"], RealActuator)
+        assert "model" not in parts   # real titles never go to the contributor model
+        us = AppSnapshot("python.exe", "python.exe", [ProcRef(os.getpid(), 1.0)], [], 50.0, 900.0,
+                         False, False, False, False)
+        verdict = parts["policy"](["python.exe"], [us])
+        assert verdict.allowed == [] and verdict.blocked[0].rule == "self"
+    finally:
+        parts["sensor"].tracker.stop()
