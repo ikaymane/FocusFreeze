@@ -37,6 +37,15 @@ PASSWORD_MANAGERS = frozenset({
     "keepass.exe", "1password.exe", "bitwarden.exe",
 })
 
+# Single source of truth for the actuator's last-line backstop: every exe
+# basename the actuator must never suspend, however it was asked. The agent
+# loop enforces these through filter(); the actuator re-checks them at
+# freeze time so a direct actuator.freeze() (e.g. `ff freeze`) cannot
+# bypass them. Additive only: filter() behaviour is unchanged. PROTECTED is
+# deliberately excluded (pseudo-process names with no exe behind them), as
+# is WORK_TOOLS_NO_AUTO (needs-card is not never-freeze).
+ACTUATOR_DENY_EXES = SYSTEM | SECURITY_SOFTWARE | ACCESSIBILITY | PASSWORD_MANAGERS
+
 # Critical pseudo-processes with no freezable exe behind them. Name list only:
 # no OpenProcess / IsProcessCritical probing, so this stays pure and portable.
 PROTECTED = frozenset({
