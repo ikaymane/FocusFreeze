@@ -180,7 +180,7 @@ def cmd_thaw(args: argparse.Namespace, actuator: RealActuator) -> int:
         for app_id in ids:
             print(f"  {app_id}")
         return 0
-    if args.app_id not in {e.app_id for e in actuator.frozen()}:
+    if args.app_id.casefold() not in {e.app_id.casefold() for e in actuator.frozen()}:
         print(f"{args.app_id} is not frozen (nothing to do)")
         return 0
     try:

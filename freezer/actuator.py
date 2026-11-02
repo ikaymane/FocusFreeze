@@ -558,7 +558,7 @@ class RealActuator:
 
     def thaw(self, app_id: str) -> None:
         with freeze_locked():
-            entry = self._ledger.load().get(app_id)
+            entry = self._ledger.load().get(app_id.casefold())
             if entry is None:
                 return
             if self._ledger.tampered:
