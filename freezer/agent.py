@@ -31,6 +31,9 @@ from freezer.contracts import (Actuator, AppSnapshot, Blocked, Decision, FocusSe
 from freezer.watchdog import beat
 from freezer.planner import DEFAULT_EFFORT, DEFAULT_MODEL, SKIPPED_REASON, plan
 
+from freezer import audit
+
+
 log = logging.getLogger(__name__)
 
 GUARDIAN_TASK = ("Free up memory. The user's current work is unknown: keep anything that "
@@ -60,6 +63,7 @@ BLOCK_REASONS = {
     "accessibility": "Accessibility tool",
     "password_manager": "Password manager",
     "user_never_freeze": "You protected this app",
+    "user_keep": "Kept for this session",
     "foreground": "You're using it right now", "plays_audio": "Playing sound",
     "elevated": "Runs as administrator", "self": "Focus Freeze itself",
     "unknown_app": "Closed or not found",
@@ -146,15 +150,28 @@ class FocusAgent:
     def __init__(self, sensor: Sensor, policy: Policy, actuator: Actuator, consent: Consent, *,
                  model: str = DEFAULT_MODEL, effort: str | None = DEFAULT_EFFORT, client: Any = None,
                  on_fallback: Callable[[str], None] | None = None,
-                 on_progress: Callable[[str, int], None] | None = None):
+                 on_progress: Callable[[str, int], None] | None = None,
+                 extra_self_pids: set[int] | frozenset | None = None):
         self.sensor, self.policy, self.actuator, self.consent = sensor, policy, actuator, consent
         self.model, self.effort, self.client, self.on_fallback = model, effort, client, on_fallback
         self.on_progress = on_progress
         self.session_name: str | None = None
         # Rolling rate limit: freeze timestamps (unix seconds) spent by _execute.
         self._freeze_times: deque[float] = deque()
+        # Extra PIDs that count as "us" even when the policy was built without
+        # them (parent shell): the loop can never suspend its own terminal.
+        self._extra_self_pids = (frozenset({os.getppid()}) if extra_self_pids is None
+                                 else frozenset(extra_self_pids))
 
     # ---- proposal ----------------------------------------------------------
+
+    def _self_blocked(self, ids: list[str], by_id: dict[str, AppSnapshot]) -> list[str]:
+        """App_ids whose snapshot tree holds one of our own extra PIDs."""
+        extra = self._extra_self_pids
+        if not extra:
+            return []
+        return [a for a in ids if a in by_id
+                and any(p.pid in extra for p in by_id[a].procs)]
 
     def propose(self, task: str, snaps: list[AppSnapshot], session: FocusSession | None,
                 source: Literal["user", "guardian"] = "user",
@@ -172,6 +189,9 @@ class FocusAgent:
         verdict = self.policy([d.app_id for d in wanted],
                               snaps if policy_snaps is None else policy_snaps)
         by_id = {s.app_id: s for s in snaps}
+        for a in self._self_blocked(list(verdict.allowed), by_id):
+            verdict.allowed.remove(a)
+            verdict.blocked.append(Blocked(a, "self"))
         allowed = {a for a in verdict.allowed if a in by_id}
         blocked = {b.app_id for b in verdict.blocked}
         to_freeze = [d for d in wanted if d.app_id in allowed]
@@ -207,6 +227,9 @@ class FocusAgent:
         recheck = self.policy([a for a in ids if a in by_id], list(by_id.values()))
         ok = {a for a in recheck.allowed if a in by_id}
         skipped = list(recheck.blocked) + [Blocked(a, "unknown_app") for a in ids if a not in by_id]
+        for a in self._self_blocked([a for a in ids if a in ok], by_id):
+            ok.discard(a)
+            skipped.append(Blocked(a, "self"))
         # Rolling rate limit, in plan order: over-limit approvals are reported as
         # skipped, never silently dropped.
         ready = [a for a in ids if a in ok]
@@ -241,7 +264,7 @@ class FocusAgent:
         total = {a.lower() for a in by_id} | already_ids
         budget = max(0, int(len(total) * MAX_FROZEN_FRACTION) - len(already_ids))
         within = attempt[:budget]
-        skipped += [Blocked(a, "too_many") for a in attempt[budget:]]
+        over_budget = attempt[budget:]
         frozen, failed = [], []
         for a in within:
             try:  # one app failing must not leave the rest half-done and unreported
@@ -249,8 +272,33 @@ class FocusAgent:
             except Exception:
                 log.exception("freeze failed for %s", a)
                 failed.append(a)
-        for _ in frozen:
+        # Backfill slots freed by failures, in plan order. Successes can never
+        # exceed the budget or the rate allotment for this call.
+        backfilled: set[str] = set()
+        for a in over_budget:
+            if len(frozen) >= len(within):
+                break
+            try:
+                frozen.append(self.actuator.freeze(by_id[a], proposal.session or ""))
+            except Exception:
+                log.exception("freeze failed for %s", a)
+                failed.append(a)
+            backfilled.add(a)
+        skipped += [Blocked(a, "too_many") for a in over_budget if a not in backfilled]
+        # Attempts burn rate budget whether or not the freeze succeeded, so a
+        # persistently failing app backs off instead of retrying forever.
+        for _ in frozen + failed:
             self._freeze_times.append(time.time())
+        try:  # the audit trail must never break the loop
+            for b in proposal.blocked:
+                audit.log(proposal.source, "block", b.app_id, b.rule)
+            for e in frozen:
+                audit.log(proposal.source, "freeze", e.app_id,
+                          f"freed {e.freed_mb:.0f} MB")
+            for b in skipped:
+                audit.log(proposal.source, "block", b.app_id, b.rule)
+        except Exception:
+            log.debug("audit log skipped", exc_info=True)
         return Outcome(proposal=proposal, frozen=frozen, failed=failed, skipped=skipped,
                        unticked=[a for a in allowed if a not in approved_set])
 
@@ -292,6 +340,11 @@ class FocusAgent:
         if proposal.plan.question:
             return Outcome(proposal=proposal, question=proposal.plan.question)
         thawed = self._thaw(proposal.thaw)  # bringing an app back needs no consent
+        try:  # the audit trail must never break the loop
+            for app_id in thawed:
+                audit.log("user", "thaw", app_id, "task switch")
+        except Exception:
+            log.debug("audit log skipped", exc_info=True)
         if not proposal.to_freeze:
             return Outcome(proposal=proposal, thawed=thawed)
         approved = self.consent(proposal)
