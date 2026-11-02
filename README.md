@@ -25,9 +25,19 @@ python -m eval.run --offline                             # timer baseline, no AP
 python -m eval.redteam --offline                         # harness plumbing, no API
 ```
 
+## Try the UI
+```powershell
+.\.venv\Scripts\python -m ui.app   # demo desk on mock parts, offline, gauge marked Simulated
+```
+Set `MODEL_API_KEY` for voice (hold `Ctrl+Alt+Space` and speak) and for `--live-planner`.
+
 ## Repo map
 | Path | What |
 |---|---|
+| [ui/](ui/) | Tray app, RAM gauge, consent and guardian cards, session picker, stats card |
+| [freezer/voice.py](freezer/voice.py) | Push-to-talk, realtime transcription, command parsing |
+| [freezer/agent.py](freezer/agent.py) | Agent loop: sensor, planner, policy, consent card, actuator |
+| [demo/](demo/) | Video script and demo rig scripts |
 | [plans/ram-freeze-agent.md](plans/ram-freeze-agent.md) | Full plan: feasibility test, evaluation, architecture, steps, budget, security |
 | [plans/roles/](plans/roles/README.md) | Step-by-step guide for each of the 4 team roles |
 | [freezer/contracts.py](freezer/contracts.py) | Shared types every role codes against |
