@@ -349,3 +349,118 @@ def test_main_marks_its_mock_data_synthetic(monkeypatch):
     monkeypatch.setattr("sys.argv", ["ff", "fixing the login bug", "--scenario", "login_bug", "--yes"])
     agent_mod._main()
     assert os.environ["FF_SYNTHETIC_DATA"] == "1"
+
+
+# ---- 80% cap regression tests (branch c/fix-policy-cap) ----
+# These run the agent loop against the REAL policy (freezer.policy.filter),
+# not the mock, so the per-call cap and the cross-call total use real rules.
+
+from freezer.contracts import AppSnapshot as _CapAppSnapshot
+from freezer.contracts import ProcRef as _CapProcRef
+from freezer.policy import filter as _real_filter
+
+_CAP_PID = 424242  # never a real test-runner PID: policy never reports "self"
+
+
+def _cap_snap(app_id, title=None, **kw):
+    args = dict(app_id=app_id, display_name=app_id,
+                procs=[_CapProcRef(_CAP_PID, 1.0)],
+                window_titles=[title] if title else [],
+                working_set_mb=100.0, last_focus_s=3600.0,
+                is_foreground=False, plays_audio=False, is_elevated=False,
+                has_network=False)
+    args.update(kw)
+    return _CapAppSnapshot(**args)
+
+
+class _CapSensor:
+    def __init__(self, snaps):
+        self._snaps = snaps
+
+    def snapshot(self):
+        return list(self._snaps)
+
+
+def _cap_agent(snaps, client, approve=None, actuator=None):
+    seen = []
+
+    def consent(p):
+        seen.append(p)
+        ids = [d.app_id for d in p.to_freeze]
+        return approve(ids) if approve else ids
+
+    act = actuator if actuator is not None else MockActuator()
+    agent = FocusAgent(_CapSensor(snaps), _real_filter, act, consent, client=client)
+    return agent, act, seen
+
+
+def test_cap_guardian_single_candidate_freezes():
+    snaps = [_cap_snap(f"app{i}.exe") for i in range(4)]
+    client = FakeClient(reply(call("freeze_apps", all_decisions(snaps[:1], {"app0.exe"}))))
+    agent, act, seen = _cap_agent(snaps, client)
+    out = agent.on_pressure(PressureEvent(ram_pct=91, sustained_s=30, candidates=["app0.exe"]))
+    assert out.proposal is not None and out.proposal.plan.model != "heuristic"
+    assert [e.app_id for e in out.frozen] == ["app0.exe"]
+
+
+def test_cap_guardian_two_candidates_in_six_freeze_both():
+    snaps = [_cap_snap(f"app{i}.exe") for i in range(6)]
+    client = FakeClient(reply(call("freeze_apps", all_decisions(snaps[:2], {"app0.exe", "app1.exe"}))))
+    agent, act, seen = _cap_agent(snaps, client)
+    out = agent.on_pressure(PressureEvent(ram_pct=91, sustained_s=30,
+                                         candidates=["app0.exe", "app1.exe"]))
+    assert [e.app_id for e in out.frozen] == ["app0.exe", "app1.exe"]
+
+
+def test_cap_guardian_planner_sees_only_candidates():
+    snaps = [_cap_snap("app0.exe", title="candidate-title-0")]
+    snaps += [_cap_snap(f"app{i}.exe", title=f"SECRET-NONCANDIDATE-TITLE-{i}") for i in range(1, 6)]
+    client = FakeClient(reply(call("freeze_apps", all_decisions(snaps[:1], {"app0.exe"}))))
+    agent, act, seen = _cap_agent(snaps, client)
+    agent.on_pressure(PressureEvent(ram_pct=91, sustained_s=30, candidates=["app0.exe"]))
+    content = client.requests[0]["messages"][1]["content"]
+    assert "app0.exe" in content
+    for i in range(1, 6):
+        assert f"app{i}.exe" not in content
+        assert f"SECRET-NONCANDIDATE-TITLE-{i}" not in content
+
+
+def test_cap_repeated_calls_cannot_exceed_eighty_percent():
+    snaps = [_cap_snap(f"app{i}.exe") for i in range(10)]
+    act = MockActuator()
+    for s in snaps[:8]:
+        act.freeze(s, "cap")
+    # The plan still wants the frozen apps frozen (so no task-switch thaw)
+    # plus one more: the 9th freeze must be refused, not silently allowed.
+    client = FakeClient(reply(call("freeze_apps", all_decisions(snaps, {f"app{i}.exe" for i in range(9)}))))
+    agent, _, seen = _cap_agent(snaps, client, actuator=act)
+    out = agent.focus("doing things")
+    assert out.thawed == []
+    assert [e.app_id for e in out.frozen] == []
+    assert [(b.app_id, b.rule) for b in out.skipped] == [("app8.exe", "too_many")]
+    assert {e.app_id for e in out.frozen} | {b.app_id for b in out.skipped} == {"app8.exe"}
+
+
+def test_cap_five_candidates_freeze_at_most_four():
+    snaps = [_cap_snap(f"app{i}.exe") for i in range(5)]
+    client = FakeClient(reply(call("freeze_apps", all_decisions(snaps, {s.app_id for s in snaps}))))
+    agent, act, seen = _cap_agent(snaps, client)
+    out = agent.focus("doing things")
+    assert len(out.frozen) == 4
+    leftovers = [b for b in list(out.proposal.blocked) + list(out.skipped) if b.rule == "too_many"]
+    assert len(leftovers) == 1
+    assert {e.app_id for e in out.frozen} | {b.app_id for b in leftovers} == {s.app_id for s in snaps}
+
+
+def test_cap_too_many_is_not_failed_and_rate_limit_holds(monkeypatch):
+    from freezer import agent as agent_mod
+    monkeypatch.setattr(agent_mod, "MAX_FREEZES_PER_MIN", 2)
+    snaps = [_cap_snap(f"app{i}.exe") for i in range(5)]
+    client = FakeClient(reply(call("freeze_apps", all_decisions(snaps, {s.app_id for s in snaps}))))
+    agent, act, seen = _cap_agent(snaps, client)
+    out = agent.focus("doing things")
+    assert out.failed == []
+    assert ("app4.exe", "too_many") in [(b.app_id, b.rule) for b in out.proposal.blocked]
+    assert [(b.app_id, b.rule) for b in out.skipped] == [("app2.exe", "rate_limited"),
+                                                        ("app3.exe", "rate_limited")]
+    assert [e.app_id for e in out.frozen] == ["app0.exe", "app1.exe"]
