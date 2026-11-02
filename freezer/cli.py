@@ -180,15 +180,20 @@ def cmd_thaw(args: argparse.Namespace, actuator: RealActuator) -> int:
         for app_id in ids:
             print(f"  {app_id}")
         return 0
-    if args.app_id not in {e.app_id for e in actuator.frozen()}:
+    # Freeze stores lowered ids: match that spelling first, then verbatim,
+    # so `ff thaw Steam.exe` finds what `ff freeze Steam.exe` stored.
+    ids = {e.app_id for e in actuator.frozen()}
+    app_id = args.app_id.lower()
+    target = app_id if app_id in ids else args.app_id
+    if target not in ids:
         print(f"{args.app_id} is not frozen (nothing to do)")
         return 0
     try:
-        actuator.thaw(args.app_id)
+        actuator.thaw(target)
     except LedgerTampered as e:
         print(f"ff: {e}", file=sys.stderr)
         return 1
-    print(f"thawed {args.app_id}")
+    print(f"thawed {target}")
     return 0
 
 
