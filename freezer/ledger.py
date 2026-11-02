@@ -243,6 +243,33 @@ def _encode(entries: dict[str, LedgerEntry]) -> bytes:
     return json.dumps({**body, "hmac": tag}, indent=1).encode("utf-8")
 
 
+def _key(app_id: str) -> str:
+    """Ledger dict key: case-insensitive app identity (F12/F13).
+
+    Entry spellings are preserved in LedgerEntry.app_id; only the dict keys
+    are folded, so Chrome.exe and chrome.exe can never hold two entries.
+    Every dict touchpoint below (add/update/remove/load/save/backup-check)
+    goes through this.
+    """
+    return app_id.casefold()
+
+
+def _merge_pair(first: LedgerEntry, second: LedgerEntry) -> LedgerEntry:
+    """Union two same-app entries, dropping no PID.
+
+    The later-frozen entry lends its spelling, session and timestamp; procs
+    unite by (pid, create_time); freed_mb sums. Deterministic, so a file
+    holding twin spellings always loads the same single entry.
+    """
+    base, other = ((second, first) if second.frozen_at >= first.frozen_at
+                   else (first, second))
+    seen = {(p.pid, p.create_time) for p in base.procs}
+    procs = (list(base.procs)
+             + [p for p in other.procs if (p.pid, p.create_time) not in seen])
+    return LedgerEntry(base.app_id, procs, base.frozen_at,
+                       base.freed_mb + other.freed_mb, base.session)
+
+
 def _parse_entries(doc: dict) -> dict[str, LedgerEntry]:
     raw_entries = doc.get("entries", [])
     if not isinstance(raw_entries, list):
@@ -250,8 +277,11 @@ def _parse_entries(doc: dict) -> dict[str, LedgerEntry]:
     out: dict[str, LedgerEntry] = {}
     for e in raw_entries:
         procs = [ProcRef(**p) for p in e["procs"]]
-        out[e["app_id"]] = LedgerEntry(
+        entry = LedgerEntry(
             e["app_id"], procs, e["frozen_at"], e["freed_mb"], e["session"])
+        key = _key(entry.app_id)
+        prev = out.get(key)
+        out[key] = entry if prev is None else _merge_pair(prev, entry)
     return out
 
 
@@ -392,6 +422,9 @@ class Ledger:
                 raise LedgerTampered(
                     "ledger HMAC mismatch: refusing new freezes, thaw_all only")
             fn(entries)
+            # Single key invariant (F12/F13): stores may use raw spellings,
+            # but the ledger dict key is always folded before the write.
+            entries = {_key(k): v for k, v in entries.items()}
             self._write_unlocked(entries, allow_backup_shrink=thaw_path)
             if thaw_path:
                 self._tampered = False  # thaw rewrote a freshly signed ledger
@@ -411,10 +444,10 @@ class Ledger:
         result: dict[str, LedgerEntry] = {}
 
         def fn(entries: dict[str, LedgerEntry]) -> None:
-            if entry.app_id in entries:
-                result["existing"] = entries[entry.app_id]
+            if _key(entry.app_id) in entries:
+                result["existing"] = entries[_key(entry.app_id)]
             else:
-                entries[entry.app_id] = entry
+                entries[_key(entry.app_id)] = entry
 
         self._mutate(fn)
         return result.get("existing")
@@ -426,7 +459,7 @@ class Ledger:
 
     def remove(self, app_id: str) -> None:
         def fn(entries: dict[str, LedgerEntry]) -> None:
-            entries.pop(app_id, None)
+            entries.pop(_key(app_id), None)
         self._mutate(fn)
 
     def save_thawed(self, entries: dict[str, LedgerEntry]) -> None:

@@ -7,8 +7,10 @@ trim (EmptyWorkingSet) every suspended process.
 Safety rules:
 - A process is acted on only if its PID is live, its exe is known and not
   a system binary (conhost.exe included), it is not in session 0, it is not
-  the agent itself, and its create time still matches the snapshot: the
-  check and the suspend happen on one handle, so a reused PID cannot be hit.
+  the agent itself, and its live create time matches the snapshot within
+  CTIME_TOL_S. Check and suspend share one handle, so a PID reused after
+  the check cannot be hit; a PID reused before it is caught unless the
+  stranger was created inside the window (accepted residual risk).
 - "System children" means members of the app tree that ARE system processes
   (system exe, session 0, unnameable). Skipping by PARENTAGE is deliberately
   not done: nearly every user app is a child of explorer.exe, so that rule
@@ -34,14 +36,18 @@ from typing import Callable, NoReturn, Protocol
 
 from freezer.contracts import AppSnapshot, LedgerEntry, ProcRef
 from freezer.ledger import Ledger, LedgerTampered, freeze_locked
+from freezer.policy import ACTUATOR_DENY_EXES
 
 log = logging.getLogger(__name__)
 
-# Create-time match tolerance (seconds). B's sensor reads the same FILETIME
-# through psutil, whose float rounding can differ from ours by microseconds,
-# so exact == would false-positive PID reuse. A reused PID colliding within
-# this window is the accepted residual risk.
-CTIME_TOL_S = 2.0
+# Create-time match tolerance (seconds). Measured float physics, not psutil:
+# same-source rereads are bit-identical and JSON round-trips exactly; a
+# foreign float conversion of the same FILETIME can differ by microseconds
+# (float ULP here is ~0.5 us), so 1 ms keeps ~1000x headroom. A reused PID
+# created inside this window of the recorded time is still hit: that is the
+# accepted residual risk. (Exact integer compare would need integer creation
+# ticks in ProcRef: a contract change, not done here.)
+CTIME_TOL_S = 0.001
 
 
 def _ctimes_match(a: float, b: float) -> bool:
@@ -59,6 +65,15 @@ SYSTEM_EXES = frozenset({
     "searchhost.exe", "sihost.exe", "taskhostw.exe", "registry", "system",
     "secure system", "memory compression",
 })
+
+
+# F1 backstop scope: B's deny lists MINUS the system-plumbing skip set above.
+# Overlapped exes (svchost, msmpeng, narrator, ...) keep their long-standing
+# per-process skip: they are expected tree members (conhost next to every
+# console app), pinned by test_freeze_skips_conhost_system_and_session0.
+# The remaining names (taskmgr, Defender/EDR services, a11y tools, password
+# managers) are never legitimate tree members: one anywhere refuses the app.
+ACTUATOR_REFUSE_EXES = ACTUATOR_DENY_EXES - SYSTEM_EXES
 
 
 STATUS_PROCESS_IS_TERMINATING = 0xC000010A
@@ -123,9 +138,11 @@ class OsLayer(Protocol):
     def suspend_verified(self, pid: int, expected_ctime: float) -> bool:
         """Suspend only if the PID is live with a matching create time.
 
-        The check and the suspend happen on one handle, so a PID reused in
-        between cannot be hit. True = suspended; False = skipped (dead or
-        reused). Genuine failures raise OSError.
+        The check and the suspend share one handle, so a PID reused after the
+        check cannot be hit. A PID reused before the check is caught unless
+        the stranger was created within CTIME_TOL_S of the recorded creation
+        time (the accepted residual risk). True = suspended; False = skipped
+        (dead or reused). Genuine failures raise OSError.
         """
     def confirmed_dead(self, pid: int) -> bool:
         """True only if the PID is provably dead (exit confirmed).
@@ -369,6 +386,31 @@ class RealActuator:
         self._clock = clock or time.time
         self.last_report: RestoreReport | None = None
 
+    def _refused_pids(self, app: AppSnapshot) -> dict[int, str]:
+        """PIDs whose live exe forbids freezing the whole app (F1 backstop).
+
+        B's deny lists are enforced here, independent of policy, so a direct
+        actuator.freeze() cannot bypass them. A denied exe anywhere in the
+        tree refuses the whole app: a half-frozen tree is the failure audit
+        item 5 already fixed. Comparison is case-insensitive. A missing exe
+        name stays on the skip path (never suspended). Unresolvable PIDs
+        are left to the main loop
+        (dead -> skip, live-but-unreachable -> failure), preserving the
+        narrowed-entry behaviour. Runs BEFORE the ledger write and before
+        anything is suspended, so a refusal leaves no trace.
+        """
+        refused: dict[int, str] = {}
+        for pref in app.procs:
+            info = self._safe_resolve(pref.pid)
+            if info is None:
+                continue
+            exe = (info.exe or "").casefold()
+            if not exe:
+                continue  # missing exe stays on the skip path (never suspended)
+            if exe in ACTUATOR_REFUSE_EXES:
+                refused[pref.pid] = f"denied:{exe}"
+        return refused
+
     def _skip_reason(self, info: ProcInfo) -> str | None:
         if info.pid == os.getpid():
             return "self"
@@ -402,6 +444,10 @@ class RealActuator:
             return self._freeze_locked(app, session)
 
     def _freeze_locked(self, app: AppSnapshot, session: str) -> LedgerEntry:
+        refused = self._refused_pids(app)
+        if refused:
+            raise FreezeError(app.app_id, "refused: denied process in app tree",
+                              skipped=refused, entry=None)
         entry = LedgerEntry(app.app_id, list(app.procs), self._clock(), 0.0, session)
         existing = self._ledger.add_if_absent(entry)  # FIRST, atomically
         if existing is not None:
@@ -519,7 +565,7 @@ class RealActuator:
 
     def thaw(self, app_id: str) -> None:
         with freeze_locked():
-            entry = self._ledger.load().get(app_id)
+            entry = self._ledger.load().get(app_id.casefold())
             if entry is None:
                 return
             if self._ledger.tampered:

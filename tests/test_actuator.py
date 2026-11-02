@@ -6,7 +6,7 @@ import pytest
 
 from freezer import ledger as ledger_mod
 from freezer.actuator import AdminRefusal, FreezeError, ProcInfo, ProcessTerminating, RealActuator, WindowsOs
-from freezer.actuator import ensure_not_elevated, is_elevated
+from freezer.actuator import CTIME_TOL_S, ensure_not_elevated, is_elevated
 from freezer.contracts import AppSnapshot, ProcRef
 from freezer.ledger import Ledger, LedgerTampered
 
@@ -47,7 +47,7 @@ class FakeOs:
             return False
         if pid in self.denied:
             raise OSError("access denied")
-        if abs(p.ctime - expected_ctime) > 2.0:
+        if abs(p.ctime - expected_ctime) > CTIME_TOL_S:
             return False
         if pid in self.terminating:
             raise ProcessTerminating("terminating")
@@ -280,7 +280,7 @@ def test_concurrent_freeze_of_same_app_suspends_once():
 
 
 def test_create_time_within_tolerance_still_matches():
-    fake = FakeOs([FakeProc(11, ctime=100.4)])  # psutil-style float wobble
+    fake = FakeOs([FakeProc(11, ctime=100.0004)])  # sub-ms foreign float rounding
     act = RealActuator(os_layer=fake, ledger=Ledger())
     act.freeze(snap("a.exe", ProcRef(11, 100.0)), "s")
     assert fake.suspended == [11]

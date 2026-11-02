@@ -185,12 +185,16 @@ def cmd_thaw(args: argparse.Namespace, actuator: RealActuator) -> int:
         for app_id in ids:
             audit.log("user", "thaw", app_id, "thaw all")
         return 0
+
+    # Ledger keys are casefolded (F12/F13): match those case-insensitively.
+
     # Freeze stores lowered ids: match that spelling first, then verbatim,
     # so `ff thaw Steam.exe` finds what `ff freeze Steam.exe` stored.
     ids = {e.app_id for e in actuator.frozen()}
-    app_id = args.app_id.lower()
-    target = app_id if app_id in ids else args.app_id
+    lowered = {i.casefold(): i for i in ids}
+    target = lowered.get(args.app_id.casefold(), args.app_id)
     if target not in ids:
+
         print(f"{args.app_id} is not frozen (nothing to do)")
         return 0
     try:
