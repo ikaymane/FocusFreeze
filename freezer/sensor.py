@@ -75,9 +75,10 @@ def _foreground_pid() -> int | None:
 
 
 def _proc_name(pid: int) -> str:
+    # ValueError: a window closing mid-call can hand back a garbage negative PID.
     try:
         return (psutil.Process(pid).name() or "").lower()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, ValueError):
         return ""
 
 

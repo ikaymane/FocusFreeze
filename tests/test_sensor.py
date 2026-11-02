@@ -108,6 +108,18 @@ def test_launcher_never_owns_the_apps_it_started(monkeypatch):
     assert {p.pid for p in by_id["code.exe"].procs} == {20, 21}
 
 
+def test_garbage_negative_pid_is_nameless_not_fatal():
+    """A window that closes mid-call can report a negative PID; psutil raises ValueError."""
+    assert sensor._proc_name(-126960096) == ""
+    tracker = sensor.ForegroundTracker()
+    sensor_fg = sensor._foreground_pid
+    try:
+        sensor._foreground_pid = lambda: -5
+        tracker._poll_once()   # must not raise: the tracker thread would die silently
+    finally:
+        sensor._foreground_pid = sensor_fg
+
+
 def test_network_true_on_established():
     est = SimpleNamespace(status="ESTABLISHED")
     assert sensor._has_network([_FakeProc(1, conns=[est])])
