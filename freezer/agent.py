@@ -40,6 +40,9 @@ MAX_AUTO_FREEZE = 3
 # Rolling rate limit (handoff patch 01, re-applied): at most this many freezes per
 # rolling minute across calls, so repeated triggers cannot strip the machine unattended.
 MAX_FREEZES_PER_MIN = 10
+# Share of all apps that may ever be frozen at once (B's guide). The policy's
+# per-call cap cannot see the ledger, so _execute enforces this total ceiling.
+MAX_FROZEN_FRACTION = 0.8
 # Work tools are never frozen without a card: killing a terminal or IDE can lose
 # running work (dev server, debug session) that the sensor cannot see, and titles
 # on these apps are attacker-writable (red-team gap-03). Matched by app_id only;
@@ -154,13 +157,19 @@ class FocusAgent:
 
     def propose(self, task: str, snaps: list[AppSnapshot], session: FocusSession | None,
                 source: Literal["user", "guardian"] = "user",
-                candidates: list[str] | None = None, frozen: set[str] | frozenset = frozenset()) -> Proposal:
-        """frozen = app_ids already in the ledger: shown to the planner, never frozen twice."""
+                candidates: list[str] | None = None, frozen: set[str] | frozenset = frozenset(),
+                policy_snaps: list[AppSnapshot] | None = None) -> Proposal:
+        """frozen = app_ids already in the ledger: shown to the planner, never frozen twice.
+
+        policy_snaps = the snapshots the policy counts for its cap; the planner
+        still sees only `snaps`. Defaults to `snaps`.
+        """
         p = plan(task, snaps, session, model=self.model, reasoning_effort=self.effort, client=self.client,
                  on_fallback=self.on_fallback, frozen=frozen, on_progress=self.on_progress)
         wanted = [d for d in p.decisions if d.action == "freeze" and d.app_id not in frozen
                   and (candidates is None or d.app_id in candidates)]
-        verdict = self.policy([d.app_id for d in wanted], snaps)
+        verdict = self.policy([d.app_id for d in wanted],
+                              snaps if policy_snaps is None else policy_snaps)
         by_id = {s.app_id: s for s in snaps}
         allowed = {a for a in verdict.allowed if a in by_id}
         blocked = {b.app_id for b in verdict.blocked}
@@ -208,8 +217,18 @@ class FocusAgent:
         skipped += [Blocked(a, "rate_limited") for a in over]
         if over:
             log.info("rate limit: freezing %d of %d approved apps", len(attempt), len(ready))
+        # Total safety ceiling: never more than MAX_FROZEN_FRACTION of all apps
+        # frozen at once, across calls. The per-call policy cap cannot see the
+        # ledger, so repeated triggers could otherwise freeze the whole desktop.
+        # Distinct app_ids, case-insensitive: a frozen app that is still listed
+        # in the fresh snapshot counts once.
+        already = {e.app_id.lower() for e in self.actuator.frozen()}
+        total = {a.lower() for a in by_id} | already
+        budget = max(0, int(len(total) * MAX_FROZEN_FRACTION) - len(already))
+        within = attempt[:budget]
+        skipped += [Blocked(a, "too_many") for a in attempt[budget:]]
         frozen, failed = [], []
-        for a in attempt:
+        for a in within:
             try:  # one app failing must not leave the rest half-done and unreported
                 frozen.append(self.actuator.freeze(by_id[a], proposal.session or ""))
             except Exception:
@@ -286,7 +305,8 @@ class FocusAgent:
         # from sensor idle seconds, never from text. Policy + freeze-time re-check
         # still apply to the result.
         plan_snaps = [s for s in live if s.app_id in set(candidates)]
-        proposal = self.propose(task, plan_snaps, session, source="guardian", candidates=candidates)
+        proposal = self.propose(task, plan_snaps, session, source="guardian",
+                                candidates=candidates, policy_snaps=live)
         if not proposal.to_freeze or proposal.plan.question:
             return Outcome(proposal=proposal)
         tools = [d.app_id for d in proposal.to_freeze if d.app_id.lower() in WORK_TOOLS_NO_AUTO]
