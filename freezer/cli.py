@@ -23,6 +23,8 @@ from typing import Callable, Sequence
 from freezer.actuator import FreezeError, RealActuator, startup_recovery
 from freezer.contracts import AppSnapshot, PolicyResult, ProcRef
 from freezer.ledger import LedgerTampered
+from freezer import sessions
+from freezer.policy import policy_for
 
 Policy = Callable[[list[str], list[AppSnapshot]], PolicyResult] | None
 
@@ -31,6 +33,13 @@ log = logging.getLogger(__name__)
 
 def build_actuator() -> RealActuator:
     return RealActuator()
+
+
+def _default_policy(session_name=None):
+    """Real B policy for `ff freeze`: the session's hard denies, plus the
+    agent's own PID and its parent shell counted as self."""
+    s = sessions.get(session_name) if session_name else None
+    return policy_for(s, self_pids={os.getpid(), os.getppid()})
 
 
 def _windows_os():
@@ -106,6 +115,9 @@ def _snapshot_for(app_id: str, refs: list[ProcRef]) -> AppSnapshot:
 
 
 def cmd_freeze(args: argparse.Namespace, actuator: RealActuator, policy: Policy = None) -> int:
+    if policy is None:
+        print("ff: refusing to freeze without a policy (no bypass)", file=sys.stderr)
+        return 2
     if args.pids:
         if not args.app:
             print("ff freeze --pids needs --app <app_id>", file=sys.stderr)
@@ -234,6 +246,8 @@ def main(argv: Sequence[str] | None = None, *, policy: Policy = None) -> int:
     if args.cmd == "thaw" and not args.all and not args.app_id:
         print("ff thaw needs an <app_id> or --all", file=sys.stderr)
         return 2
+    if args.cmd == "freeze" and policy is None:
+        policy = _default_policy(getattr(args, "session", ""))
     actuator = build_actuator()
     try:
         if args.cmd == "freeze":
