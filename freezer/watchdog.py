@@ -136,6 +136,28 @@ def run_watchdog(actuator: ThawAll, *, interval_s: float = 5.0, max_age_s: float
         time.sleep(interval_s)
 
 
+def _main() -> None:
+    """Watchdog process: python -m freezer.watchdog --parent PID
+
+    Thaws when the heartbeat goes stale, and once more when the parent
+    exits: a crash can leave a fresh beat behind, and thawing is always safe.
+    """
+    import argparse
+
+    import psutil
+
+    from freezer.actuator import RealActuator
+
+    ap = argparse.ArgumentParser(description=_main.__doc__)
+    ap.add_argument("--parent", type=int, required=True, help="agent PID to outlive")
+    args = ap.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s watchdog %(message)s")
+    actuator = RealActuator()
+    run_watchdog(actuator, interval_s=2.0, stop=lambda: not psutil.pid_exists(args.parent))
+    if thawed := actuator.thaw_all():
+        log.warning("watchdog: parent pid=%d gone, thawed %s", args.parent, thawed)
+
+
 class Heartbeat:
     """Background beat() ticker for the agent process lifetime.
 
@@ -289,3 +311,7 @@ class PanicKey:
         except BaseException as e:  # noqa: BLE001 - reported to start()
             self._error = e
             self._ready.set()
+
+
+if __name__ == "__main__":
+    _main()
