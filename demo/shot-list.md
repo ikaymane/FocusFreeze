@@ -20,7 +20,7 @@ Numbers in [brackets] are read off the rig during the take. Never narrate one we
 
 ## Before each take (film machine)
 1. `git pull`, then `.\.venv\Scripts\pip install -r requirements.txt`, then `python -m pytest tests -q`: all green.
-2. `$env:MODEL_API_KEY` set. **Without it, the hotkey replays scripted lines and the planner falls back to the idle rule: never film like that.**
+2. `$env:MODEL_API_KEY` set, and `$env:FF_PAID_BALANCE = "1"` once someone confirms the Meta balance is paid. **Without the key, the hotkey replays scripted lines. Without the flag, real titles never reach Muse Spark and the card runs on the simple idle rule. Never film either way.**
 3. `$env:FF_HOME = (New-Item -ItemType Directory "$env:TEMP\ff-take-$(Get-Date -f HHmmss)").FullName`: a fresh folder per take, so no real sessions are touched.
 4. `powershell -File demo/setup.ps1`. Type a line in Word and **do not save**.
 5. `python -m ui.app --live`. Do not run it as administrator: it refuses to start.
