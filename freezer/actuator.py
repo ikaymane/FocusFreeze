@@ -7,8 +7,10 @@ trim (EmptyWorkingSet) every suspended process.
 Safety rules:
 - A process is acted on only if its PID is live, its exe is known and not
   a system binary (conhost.exe included), it is not in session 0, it is not
-  the agent itself, and its create time still matches the snapshot: the
-  check and the suspend happen on one handle, so a reused PID cannot be hit.
+  the agent itself, and its live create time matches the snapshot within
+  CTIME_TOL_S. Check and suspend share one handle, so a PID reused after
+  the check cannot be hit; a PID reused before it is caught unless the
+  stranger was created inside the window (accepted residual risk).
 - "System children" means members of the app tree that ARE system processes
   (system exe, session 0, unnameable). Skipping by PARENTAGE is deliberately
   not done: nearly every user app is a child of explorer.exe, so that rule
@@ -38,11 +40,14 @@ from freezer.policy import ACTUATOR_DENY_EXES
 
 log = logging.getLogger(__name__)
 
-# Create-time match tolerance (seconds). B's sensor reads the same FILETIME
-# through psutil, whose float rounding can differ from ours by microseconds,
-# so exact == would false-positive PID reuse. A reused PID colliding within
-# this window is the accepted residual risk.
-CTIME_TOL_S = 2.0
+# Create-time match tolerance (seconds). Measured float physics, not psutil:
+# same-source rereads are bit-identical and JSON round-trips exactly; a
+# foreign float conversion of the same FILETIME can differ by microseconds
+# (float ULP here is ~0.5 us), so 1 ms keeps ~1000x headroom. A reused PID
+# created inside this window of the recorded time is still hit: that is the
+# accepted residual risk. (Exact integer compare would need integer creation
+# ticks in ProcRef: a contract change, not done here.)
+CTIME_TOL_S = 0.001
 
 
 def _ctimes_match(a: float, b: float) -> bool:
@@ -133,9 +138,11 @@ class OsLayer(Protocol):
     def suspend_verified(self, pid: int, expected_ctime: float) -> bool:
         """Suspend only if the PID is live with a matching create time.
 
-        The check and the suspend happen on one handle, so a PID reused in
-        between cannot be hit. True = suspended; False = skipped (dead or
-        reused). Genuine failures raise OSError.
+        The check and the suspend share one handle, so a PID reused after the
+        check cannot be hit. A PID reused before the check is caught unless
+        the stranger was created within CTIME_TOL_S of the recorded creation
+        time (the accepted residual risk). True = suspended; False = skipped
+        (dead or reused). Genuine failures raise OSError.
         """
     def confirmed_dead(self, pid: int) -> bool:
         """True only if the PID is provably dead (exit confirmed).
