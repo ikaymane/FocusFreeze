@@ -225,3 +225,38 @@ def test_cap_applies_after_deny_rules():
     assert len(v.allowed) == 8  # floor(0.8 * 11); refused apps use no budget
     assert [b.rule for b in v.blocked
             if b.app_id != "explorer.exe"] == ["too_many"] * 2
+
+
+def test_keep_rules_are_a_hard_deny():
+    session = FocusSession(name="thesis", task="writing", keep_rules=["zotero.exe"],
+                           never_freeze=[])
+    v = policy_for(session, self_pids={999999})(["zotero.exe", "steam.exe"],
+                                                [snap("zotero.exe"), snap("steam.exe")])
+    assert v.allowed == ["steam.exe"]
+    assert [(b.app_id, b.rule) for b in v.blocked] == [("zotero.exe", "user_keep")]
+
+
+def test_keep_rules_match_any_case():
+    session = FocusSession(name="thesis", task="writing", keep_rules=["Spotify.exe"],
+                           never_freeze=[])
+    v = policy_for(session, self_pids={999999})(["spotify.exe"], [snap("spotify.exe")])
+    assert v.allowed == []
+    assert [(b.app_id, b.rule) for b in v.blocked] == [("spotify.exe", "user_keep")]
+
+
+def test_keep_direct_filter_param():
+    v = filter(["spotify.exe", "steam.exe"],
+               [snap("spotify.exe"), snap("steam.exe"), snap("filler.exe")],
+               keep=["STEAM.EXE"], self_pids={999999})
+    assert v.allowed == ["spotify.exe"]
+    assert [(b.app_id, b.rule) for b in v.blocked] == [("steam.exe", "user_keep")]
+
+
+def test_keep_refused_apps_use_no_cap_budget():
+    snaps = [_plain(i) for i in range(5)] + [snap("zotero.exe")]
+    session = FocusSession(name="thesis", task="writing", keep_rules=["zotero.exe"],
+                           never_freeze=[])
+    v = policy_for(session, self_pids={999999})([s.app_id for s in snaps], snaps)
+    assert len(v.allowed) == 4  # floor(0.8 * 6); the kept app uses no budget
+    assert [(b.app_id, b.rule) for b in v.blocked] == [
+        ("zotero.exe", "user_keep"), ("app4.exe", "too_many")]
