@@ -213,15 +213,19 @@ def load_key() -> bytes:
             return _dpapi_unprotect(blob)
         return blob  # non-Windows dev fallback: raw key file, mode 0600
     key = os.urandom(_KEY_BYTES)
+    # Atomic like the ledger itself: a torn key write used to wedge every
+    # future thaw on an unreadable key.
+    tmp = p.with_name(p.name + ".tmp")
     p.parent.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        p.write_bytes(_dpapi_protect(key))
+        tmp.write_bytes(_dpapi_protect(key))
     else:
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             os.write(fd, key)
         finally:
             os.close(fd)
+    os.replace(tmp, p)
     return key
 
 
@@ -231,7 +235,11 @@ def _encode(entries: dict[str, LedgerEntry]) -> bytes:
     body = {"v": LEDGER_VERSION,
             "entries": [asdict(e) for e in entries.values()]}
     raw = json.dumps(body, sort_keys=True).encode("utf-8")
-    tag = hmac.new(load_key(), raw, hashlib.sha256).hexdigest()
+    try:
+        key = load_key()
+    except OSError as e:
+        raise LedgerTampered(f"cannot sign ledger, key unreadable: {e}")
+    tag = hmac.new(key, raw, hashlib.sha256).hexdigest()
     return json.dumps({**body, "hmac": tag}, indent=1).encode("utf-8")
 
 
@@ -263,7 +271,17 @@ def _decode(data: bytes) -> tuple[dict[str, LedgerEntry], bool]:
             return {}, False
         body = {k: v for k, v in doc.items() if k != "hmac"}
         raw = json.dumps(body, sort_keys=True).encode("utf-8")
-        if not hmac.compare_digest(tag, hmac.new(load_key(), raw, hashlib.sha256).hexdigest()):
+        try:
+            key = load_key()
+        except OSError:
+            # Corrupt key: thaw path must still work, so return what parses
+            # and let the tamper flag refuse new freezes.
+            log.error("ledger_key_unreadable: %s corrupt, entering tamper mode", key_path())
+            try:
+                return _parse_entries(doc), False
+            except (KeyError, TypeError):
+                return {}, False
+        if not hmac.compare_digest(tag, hmac.new(key, raw, hashlib.sha256).hexdigest()):
             log.error("ledger_tampered: HMAC mismatch on %s", ledger_path())
             try:
                 return _parse_entries(doc), False
@@ -272,6 +290,17 @@ def _decode(data: bytes) -> tuple[dict[str, LedgerEntry], bool]:
         return _parse_entries(doc), True
     except (ValueError, KeyError, TypeError, AttributeError):
         return {}, False
+
+
+def _union(first: dict[str, LedgerEntry], second: dict[str, LedgerEntry]
+           ) -> dict[str, LedgerEntry]:
+    """Merge two entry sets; on one app_id the later frozen_at wins."""
+    out = dict(second)
+    for app_id, entry in first.items():
+        prev = out.get(app_id)
+        if prev is None or entry.frozen_at >= prev.frozen_at:
+            out[app_id] = entry
+    return out
 
 
 # ---- the ledger ------------------------------------------------------------------
@@ -294,7 +323,7 @@ class Ledger:
         if self._path.exists():
             entries, ok = _decode(self._path.read_bytes())
             if not ok:
-                self._tampered = True
+                return self._read_damaged(entries)
             return entries
         bak = self._backup_path()
         if not bak.exists():
@@ -308,12 +337,44 @@ class Ledger:
         self._tampered = True  # deletion itself is tamper evidence: read-only
         return entries
 
-    def _write_unlocked(self, entries: dict[str, LedgerEntry]) -> None:
+    def _read_damaged(self, primary: dict[str, LedgerEntry]) -> dict[str, LedgerEntry]:
+        """Primary exists but is damaged or tampered: union with the backup.
+
+        Sets the tamper flag (fail closed for new freezes; thaw still works).
+        On a conflict the entry with the later frozen_at wins: it reflects
+        the more recent real freeze.
+        """
+        self._tampered = True
+        bak = self._backup_path()
+        if not bak.exists():
+            log.error("ledger_damaged: %s unreadable, no backup", self._path)
+            return primary
+        bak_entries, _ = _decode(bak.read_bytes())
+        log.error("ledger_damaged: %s unreadable, fell back to backup", self._path)
+        return _union(primary, bak_entries)
+
+    def _backup_holds_more(self, ids: set[str]) -> bool:
+        """True when the current backup lists apps the new write would drop."""
+        bak = self._backup_path()
+        if not bak.exists():
+            return False
+        bak_entries, _ = _decode(bak.read_bytes())
+        return bool(set(bak_entries) - ids)
+
+    def _write_unlocked(self, entries: dict[str, LedgerEntry], *,
+                        allow_backup_shrink: bool = False) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         data = _encode(entries)
         tmp = self._path.with_name(self._path.name + ".tmp")
         tmp.write_bytes(data)
         os.replace(tmp, self._path)
+        if not allow_backup_shrink and self._backup_holds_more(set(entries)):
+            # The backup is our only copy of apps this write would forget
+            # (e.g. a single thaw, or a write after a damaged read): the
+            # primary moves on, the backup keeps the fuller history. Only a
+            # deliberate thaw_all (save_thawed) may shrink it.
+            log.warning("ledger_backup: keeping fuller backup, not shrinking it")
+            return
         btmp = self._path.with_name(self._path.name + ".bak.tmp")
         btmp.write_bytes(data)
         os.replace(btmp, self._backup_path())
@@ -331,7 +392,7 @@ class Ledger:
                 raise LedgerTampered(
                     "ledger HMAC mismatch: refusing new freezes, thaw_all only")
             fn(entries)
-            self._write_unlocked(entries)
+            self._write_unlocked(entries, allow_backup_shrink=thaw_path)
             if thaw_path:
                 self._tampered = False  # thaw rewrote a freshly signed ledger
             return entries
@@ -373,6 +434,12 @@ class Ledger:
         thawing is always safe, and entries are re-verified (PID+ctime) on
         every thaw, so a re-signed leftover cannot trick a future resume."""
         was_tampered = self._tampered
-        self._mutate(lambda cur: (cur.clear(), cur.update(entries)), thaw_path=True)
+        try:
+            self._mutate(lambda cur: (cur.clear(), cur.update(entries)), thaw_path=True)
+        except LedgerTampered:
+            # Key unreadable mid-thaw: processes are already resumed, so keep
+            # the old file and stay in tamper mode instead of failing the thaw.
+            log.error("ledger_key_unreadable: thawed but could not re-sign ledger")
+            return
         if was_tampered:
             log.warning("ledger_tampered: thaw rewrote the ledger, clearing tamper flag")

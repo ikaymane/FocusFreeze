@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 class ThawAll(Protocol):
     def thaw_all(self) -> list[str]: ...
+    def frozen(self) -> list: ...
 
 
 def heartbeat_path() -> Path:
@@ -53,10 +54,22 @@ def check(actuator: ThawAll, *, max_age_s: float = 15.0,
           clock: Callable[[], float] = time.time) -> bool:
     """Thaw everything if the agent looks dead. Returns True if it thawed."""
     data = read_beat()
-    if data is None:
-        return False  # agent never started: nothing to rescue
+    now = clock()
+    if data is None or data[1] > now:
+        # No heartbeat, or one from the future (clock skew): only safe to
+        # ignore when nothing is frozen. A non-empty ledger with no valid
+        # heartbeat means a crash before the first beat, a deleted heartbeat
+        # file, or skew — thaw, don't strand.
+        frozen = actuator.frozen()
+        if not frozen:
+            return False
+        log.warning("watchdog: no valid heartbeat with %d frozen app(s), thawing",
+                    len(frozen))
+        actuator.thaw_all()
+        return True
+
     pid, ts = data
-    if clock() - ts <= max_age_s:
+    if now - ts <= max_age_s:
         return False
     thawed = actuator.thaw_all()
     log.warning("watchdog: agent pid=%d silent for %.0fs, thawed %d app(s)",
@@ -76,6 +89,56 @@ def run_watchdog(actuator: ThawAll, *, interval_s: float = 5.0, max_age_s: float
         if stop is not None and stop():
             return
         time.sleep(interval_s)
+
+
+class Heartbeat:
+    """Background beat() ticker for the agent process lifetime.
+
+    Beats used to happen only inside focus/on_pressure/done, so 15 s idle or
+    an open consent card looked dead to the watchdog. Phase 2 starts one of
+    these with the entry point and stops it on exit.
+    """
+
+    def __init__(self, interval_s: float = 5.0,
+                 clock: Callable[[], float] = time.time) -> None:
+        self._interval = interval_s
+        self._clock = clock
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        if self.running:
+            raise RuntimeError("heartbeat already started")
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name="focusfreeze-heartbeat")
+        self._thread.start()
+        try:
+            beat(self._clock)  # no gap before the first tick
+        except Exception:  # noqa: BLE001 - a locked disk at startup must not kill the agent
+            log.exception("heartbeat initial beat failed, thread keeps trying")
+
+    def stop(self, timeout_s: float = 10.0) -> None:
+        t = self._thread
+        self._thread = None
+        if t is None:
+            return
+        self._stop.set()
+        t.join(timeout_s)
+        if t.is_alive():
+            raise TimeoutError("heartbeat thread did not stop")
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                beat(self._clock)
+            except Exception:  # noqa: BLE001 - a failed beat must not end beating
+                log.exception("heartbeat beat failed")
+            self._stop.wait(self._interval)
 
 
 class PanicKey:

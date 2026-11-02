@@ -8,7 +8,7 @@ import pytest
 
 from freezer import watchdog
 from freezer.mocks import MockActuator
-from freezer.watchdog import PanicKey
+from freezer.watchdog import Heartbeat, PanicKey
 
 
 class CountingActuator(MockActuator):
@@ -45,6 +45,32 @@ def test_missing_heartbeat_does_nothing():
     assert watchdog.check(CountingActuator()) is False
 
 
+def _freeze_one(act):
+    from freezer.contracts import AppSnapshot, ProcRef
+    act.freeze(AppSnapshot("x.exe", "x", [ProcRef(1, 2.0)], [], 1.0, 0.0,
+                           False, False, False, False), "")
+    return act
+
+
+def test_missing_heartbeat_with_frozen_apps_thaws():
+    watchdog.heartbeat_path().unlink(missing_ok=True)
+    act = _freeze_one(CountingActuator())
+    assert watchdog.check(act) is True
+    assert act.thaw_all_calls == 1
+
+
+def test_future_heartbeat_with_frozen_apps_thaws():
+    act = _freeze_one(CountingActuator())
+    write_beat(1234, time.time() + 3600)
+    assert watchdog.check(act) is True
+    assert act.thaw_all_calls == 1
+
+
+def test_future_heartbeat_empty_ledger_ignored():
+    write_beat(1234, time.time() + 3600)
+    assert watchdog.check(CountingActuator()) is False
+
+
 def test_run_watchdog_checks_once_then_stops():
     write_beat(1234, time.time() - 100)
     act = CountingActuator()
@@ -75,6 +101,33 @@ def test_panic_key_lifecycle():
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only hotkey")
+def test_heartbeat_advances_while_running():
+    hb = Heartbeat(interval_s=0.05)
+    hb.start()
+    try:
+        assert hb.running
+        first = watchdog.read_beat()
+        assert first is not None and first[0] == os.getpid()
+        deadline = time.time() + 5
+        while watchdog.read_beat()[1] <= first[1]:
+            assert time.time() < deadline, "heartbeat never ticked again"
+            time.sleep(0.05)
+    finally:
+        hb.stop()
+    assert not hb.running
+
+
+def test_heartbeat_double_start_raises_and_stop_is_idempotent():
+    hb = Heartbeat(interval_s=60)
+    hb.start()
+    try:
+        with pytest.raises(RuntimeError):
+            hb.start()
+    finally:
+        hb.stop()
+    hb.stop()  # stopping a stopped heartbeat is fine
+
+
 def test_panic_key_dispatches_to_callback():
     import ctypes
 
