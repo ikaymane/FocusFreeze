@@ -60,6 +60,7 @@ BLOCK_REASONS = {
     "accessibility": "Accessibility tool",
     "password_manager": "Password manager",
     "user_never_freeze": "You protected this app",
+    "user_keep": "Kept for this session",
     "foreground": "You're using it right now", "plays_audio": "Playing sound",
     "elevated": "Runs as administrator", "self": "Focus Freeze itself",
     "unknown_app": "Closed or not found",
