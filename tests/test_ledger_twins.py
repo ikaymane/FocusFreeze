@@ -38,7 +38,7 @@ def live_pair(tmp_path):
         marker = tmp_path / name
         marker.write_text("", encoding="utf-8")
         proc = subprocess.Popen(
-            [sys.executable, "-c", _TICK_SRC, str(marker)],
+            [getattr(sys, "_base_executable", sys.executable), "-c", _TICK_SRC, str(marker)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         kids.append((proc, marker))
     try:

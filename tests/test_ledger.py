@@ -153,7 +153,7 @@ def test_concurrent_thread_writes_lose_nothing():
 
 def test_lock_excludes_another_process():
     child = subprocess.Popen(
-        [sys.executable, "-c",
+        [getattr(sys, "_base_executable", sys.executable), "-c",
          "from freezer.ledger import _file_lock; import time\n"
          "with _file_lock():\n"
          "    print('HELD', flush=True)\n"

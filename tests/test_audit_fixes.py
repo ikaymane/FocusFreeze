@@ -38,7 +38,7 @@ def live_app(tmp_path):
     marker = tmp_path / "ticks.txt"
     marker.write_text("", encoding="utf-8")
     proc = subprocess.Popen(
-        [sys.executable, "-c",
+        [getattr(sys, "_base_executable", sys.executable), "-c",
          "import sys, time\n"
          "p = sys.argv[1]\n"
          "while True:\n"
@@ -200,7 +200,7 @@ def live_pair(tmp_path):
         marker = tmp_path / name
         marker.write_text("", encoding="utf-8")
         proc = subprocess.Popen(
-            [sys.executable, "-c", _TICK_SRC, str(marker)],
+            [getattr(sys, "_base_executable", sys.executable), "-c", _TICK_SRC, str(marker)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         kids.append((proc, marker))
     try:
