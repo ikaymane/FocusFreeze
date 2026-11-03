@@ -490,3 +490,31 @@ def test_snapshot_runs_off_the_gui_thread_and_lands_back_on_it(qapp):
         wait_until(qapp, lambda: got[-1] == "ok")
     finally:
         off.shutdown()
+
+
+def test_live_policy_hard_blocks_the_active_sessions_rules():
+    """policy_for(None) ignored the session: its never-freeze and keep rules must be
+    hard blocks in --live, and follow the user when they switch session."""
+    from freezer.contracts import AppSnapshot, ProcRef
+    from ui.app import SessionPolicy
+
+    def snap(app_id, pid):
+        return AppSnapshot(app_id, app_id, [ProcRef(pid, 1.0)], [], 300.0, 3600.0, False, False, False, False)
+
+    desk = [snap("discord.exe", 9101), snap("acrord32.exe", 9102), snap("steam.exe", 9103),
+            snap("slack.exe", 9104), snap("notepad.exe", 9105)]
+    sessions.start("thesis", "writing my thesis")
+    sessions.add_rule("thesis", "discord.exe", "never_freeze")
+    sessions.add_rule("thesis", "acrord32.exe", "keep")
+    active = {"name": "thesis"}
+    policy = SessionPolicy(set())
+    policy.active = lambda: active["name"]
+
+    verdict = policy(["discord.exe", "acrord32.exe", "steam.exe"], desk)
+    assert verdict.allowed == ["steam.exe"]
+    assert {(b.app_id, b.rule) for b in verdict.blocked} == {("discord.exe", "user_never_freeze"),
+                                                            ("acrord32.exe", "user_keep")}
+    sessions.add_rule("thesis", "steam.exe", "never_freeze")   # a rule saved mid-session applies at once
+    assert policy(["steam.exe"], desk).allowed == []
+    active["name"] = None                                      # switched away: no session rules
+    assert policy(["discord.exe", "acrord32.exe"], desk).allowed == ["discord.exe", "acrord32.exe"]

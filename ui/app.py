@@ -431,16 +431,30 @@ def connect_gauge(ctl: Controller, gauge: Gauge, overlay: MotionOverlay,
     ctl.thawed.connect(thawed)
 
 
+class SessionPolicy:
+    """B's policy for whichever session is active. Its never-freeze and keep rules are
+    hard blocks, re-read on every call, so a session switch or a new rule applies at once."""
+
+    def __init__(self, self_pids):
+        self.self_pids = self_pids
+        self.active: Callable[[], str | None] = lambda: None   # main() points this at the agent
+
+    def __call__(self, freeze_ids, snapshots):
+        from freezer.policy import policy_for
+        name = self.active()
+        return policy_for(sessions.get(name) if name else None,
+                          self_pids=self.self_pids)(freeze_ids, snapshots)
+
+
 def make_parts(live_planner: bool, live: bool = False) -> dict:
     """The one place to swap mocks for the real parts."""
     if live:
         from freezer.actuator import RealActuator
-        from freezer.policy import policy_for
         from freezer.sensor import ForegroundTracker, RealSensor
         # Real titles: the default model, never the contributor one, which trains on
         # what it receives. The tracker supplies the idle times the guardian needs.
         return dict(sensor=RealSensor(ForegroundTracker().start()),
-                    policy=policy_for(None, self_pids={os.getpid(), os.getppid()}),
+                    policy=SessionPolicy({os.getpid(), os.getppid()}),
                     actuator=RealActuator())
     if not live_planner:
         mocks.install()
@@ -495,6 +509,8 @@ def main() -> int:
         ram = lambda: mocks.ram_for(actuator)
         guardian = Guardian(ram_pct=lambda: ram().pct)
     ctl = Controller(**parts, speak=speaker.say, read_ram=ram, on_guardian_dismiss=guardian.dismissed)
+    if isinstance(parts["policy"], SessionPolicy):
+        parts["policy"].active = lambda: ctl.agent.session_name
 
     gauge = Gauge(ctl.read_ram, simulated=not args.live)
     overlay = MotionOverlay()
