@@ -165,6 +165,40 @@ def _prune(exe: str, procs: list, owners: set[str]) -> list:
     return [p for p in procs if not under_cut(p)]
 
 
+def _dedupe_pids(per_app: list) -> list:
+    """One PID in exactly one app.
+
+    :func:`_prune` cuts launcher/child overlaps by owner name, but a
+    mid-sample race (reparenting, PID reuse, disagreeing name lookups) can
+    still land one PID in two trees. The window owner's own app wins;
+    otherwise the most specific (smallest) tree keeps it; ties break by app
+    name so the outcome is deterministic. Without this, freezing a launcher
+    suspends what it opened, and one thaw leaves a PID suspended.
+    """
+    by_pid: dict[int, list[int]] = {}
+    for i, (_, _, procs) in enumerate(per_app):
+        for proc in procs:
+            by_pid.setdefault(proc.pid, []).append(i)
+    winner: dict[int, int] = {}
+    for pid, idxs in by_pid.items():
+        if len(idxs) == 1:
+            winner[pid] = idxs[0]
+            continue
+        owned = [i for i in idxs if pid in per_app[i][1]]
+        if owned:
+            best = sorted(owned, key=lambda i: per_app[i][0])[0]
+        else:
+            best = sorted(idxs,
+                          key=lambda i: (len(per_app[i][2]), per_app[i][0]))[0]
+        winner[pid] = best
+    out = []
+    for i, (exe, win_pids, procs) in enumerate(per_app):
+        kept = [proc for proc in procs if winner[proc.pid] == i]
+        if kept:
+            out.append((exe, win_pids, kept))
+    return out
+
+
 def _working_set_mb(procs: list[psutil.Process]) -> float:
     total = 0.0
     for p in procs:
@@ -300,15 +334,18 @@ class RealSensor:
             g["pids"].append(pid)
             if len(g["titles"]) < _MAX_TITLES_PER_APP:
                 g["titles"].append(title)
-        snaps: list[AppSnapshot] = []
+        per_app: list[tuple[str, set[int], list]] = []
         for exe, g in groups.items():
             tree: dict[int, psutil.Process] = {}
             for pid in g["pids"]:
                 for proc in _tree(pid):
                     tree.setdefault(proc.pid, proc)
             procs = _prune(exe, list(tree.values()), set(groups))
-            if not procs:
-                continue
+            if procs:
+                per_app.append((exe, set(g["pids"]), procs))
+        snaps: list[AppSnapshot] = []
+        for exe, _win_pids, procs in _dedupe_pids(per_app):
+            g = groups[exe]
             refs = []
             for proc in procs:
                 try:
