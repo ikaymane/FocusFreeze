@@ -24,8 +24,8 @@ WARNING_MARK = "⚠"
 DISCONNECT_NOTE = f"{WARNING_MARK} may disconnect, reconnects on restore"
 ROW_DELAY_S = 0.028
 
-# What people call the apps the live sensor reports by exe. Display only: the planner,
-# policy and blocked lines all keep the exact app_id.
+# What people call the apps the live sensor reports by exe. Display only: the planner and
+# policy keep the exact app_id, and blocked lines carry it as their tooltip.
 FRIENDLY = {
     "chrome.exe": "Google Chrome", "msedge.exe": "Microsoft Edge", "firefox.exe": "Firefox",
     "code.exe": "Visual Studio Code", "windowsterminal.exe": "Windows Terminal",
@@ -205,7 +205,9 @@ class ConsentCard(Card):
             box.setContentsMargins(12, 7, 10, 7)
             box.setSpacing(1)
             for b in proposal.blocked:
-                box.addWidget(label(f"{b.app_id} — BLOCKED: {rule_words(b.rule)}", color=theme.HOT))
+                line = label(f"{self._name(b.app_id)} · Protected: {rule_words(b.rule)}", color=theme.HOT)
+                line.setToolTip(b.app_id)   # the exact id the policy refused
+                box.addWidget(line)
             self.body.addWidget(self.blocked_box)
 
         # Pinned at the bottom, above the buttons: the apps where the AI overrules the

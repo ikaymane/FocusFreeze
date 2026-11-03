@@ -96,10 +96,12 @@ def test_card_shows_decisions_blocked_reasons_and_total(ctl, qapp):
     assert card.width() == 640 and card.height() == 560
     assert card.heading.text() == mocks.LOGIN_TASK
     assert card.total.text() == "~2.6 GB to free"
-    assert "explorer.exe — BLOCKED: Protected process" in texts
-    assert "msedge.exe — BLOCKED: Injection attempt in title — blocked" in texts
-    assert "spotify.exe — BLOCKED: Playing audio" in texts
-    assert "code.exe — BLOCKED: Currently in use" in texts
+    assert "File Explorer · Protected: Protected process" in texts
+    assert "Microsoft Edge · Protected: Injection attempt in title — blocked" in texts
+    assert "Spotify · Protected: Playing audio" in texts
+    assert "Visual Studio Code · Protected: Currently in use" in texts
+    tips = {w.toolTip() for w in card.blocked_box.findChildren(QLabel)}
+    assert tips == {"explorer.exe", "msedge.exe", "spotify.exe", "code.exe"}   # exact ids kept
     assert any("a timer would freeze this" in t for t in texts)
     assert any("may disconnect" in t for t in texts)
     assert card.blocked_box.parent() is card.frame   # pinned, never scrolled away
