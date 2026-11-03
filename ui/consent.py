@@ -37,6 +37,22 @@ FRIENDLY = {
 }
 
 
+CONTRAST_LINES = 2   # pinned lines: more would push the freeze list off a 560 px card
+
+
+def shown_contrasts(proposal: Proposal) -> list:
+    """AI-vs-timer disagreements worth a line. Blocked apps are left out (the card already
+    says policy refused them), and "AI keeps what a timer would freeze" comes first: it
+    is the case a timer gets wrong and loses work over."""
+    blocked = {b.app_id for b in proposal.blocked}
+    return sorted((c for c in proposal.vs_timer if c.app_id not in blocked), key=lambda c: c.ai != "keep")
+
+
+def contrast_line(c, name: str) -> str:
+    """'Idle timer would freeze: Reference PDF  ·  AI keeps it: OAuth spec for this bug'"""
+    return f"Idle timer would {c.timer}: {name}  ·  AI {'keeps' if c.ai == 'keep' else 'freezes'} it: {c.reason}"
+
+
 def app_name(app_id: str, app=None) -> str:
     if app is not None and app.display_name and app.display_name.lower() != app_id.lower():
         return app.display_name   # the sensor already has a better name
@@ -164,6 +180,21 @@ class ConsentCard(Card):
         holder.setFixedWidth(WIDTH - 54)
         self.scroll.setWidget(holder)
         self.body.addWidget(self.scroll, 1)
+
+        # Pinned too: the apps where the AI overrules the idle timer are the proof it
+        # is not bolted on, so they must read on camera without scrolling.
+        self.contrast_box: QFrame | None = None
+        if contrasts := shown_contrasts(proposal):
+            self.contrast_box = QFrame(objectName="contrast")
+            box = QVBoxLayout(self.contrast_box)
+            box.setContentsMargins(12, 7, 10, 7)
+            box.setSpacing(2)
+            box.addWidget(label("AI vs a 20-minute idle timer", color=theme.ICE, bold=True))
+            for c in contrasts[:CONTRAST_LINES]:
+                box.addWidget(label(contrast_line(c, self._name(c.app_id)), wrap=True))
+            if more := len(contrasts) - CONTRAST_LINES:
+                box.addWidget(label(f"+{more} more where they disagree", color=theme.MUTED))
+            self.body.addWidget(self.contrast_box)
 
         # Pinned, not in the scroll area: safety refusals must never be below the fold.
         if proposal.blocked:

@@ -547,3 +547,23 @@ def test_own_pids_protect_every_ancestor_and_the_watchdog():
         for c in psutil.Process(dog.pid).children(recursive=True):
             c.kill()
         dog.kill()
+
+
+def test_card_shows_ai_vs_timer_with_names_keep_first(ctl, qapp):
+    card = open_login_card(ctl, qapp)
+    assert card.contrast_box is not None and card.contrast_box.parent() is card.frame   # pinned
+    lines = [w.text() for w in card.contrast_box.findChildren(QLabel)]
+    assert lines[0] == "AI vs a 20-minute idle timer"
+    assert lines[1].startswith("Idle timer would freeze: Adobe Acrobat Reader  ·  AI keeps it: Reference PDF")
+    assert not any("msedge" in t or "Microsoft Edge" in t for t in lines)   # blocked: no "AI freezes it"
+    assert len(lines) == 1 + 2 + 1 and lines[-1] == "+2 more where they disagree"
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_ai_vs_timer_hidden_in_simple_mode(ctl, qapp, monkeypatch):
+    monkeypatch.setattr(mocks, "fallback_reason", "the AI didn't answer in time")
+    card = open_login_card(ctl, qapp)
+    assert card.proposal.vs_timer == [] and card.contrast_box is None
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
