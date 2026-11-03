@@ -51,6 +51,8 @@ def _enum_windows() -> list[tuple[int, str, int]]:
         try:
             if not win32gui.IsWindowVisible(hwnd):
                 return
+            if _is_cloaked(hwnd) or _is_tool_window(hwnd):
+                return
             title = (win32gui.GetWindowText(hwnd) or "").strip()
             if not title:
                 return
@@ -61,6 +63,36 @@ def _enum_windows() -> list[tuple[int, str, int]]:
 
     win32gui.EnumWindows(cb, None)
     return found
+
+
+_DWMWA_CLOAKED = 14
+_GWL_EXSTYLE = -20
+_WS_EX_TOOLWINDOW = 0x80
+
+
+def _is_cloaked(hwnd: int) -> bool:
+    """True when DWM reports the window cloaked (shell parts, no real UI)."""
+    try:
+        import ctypes
+        cloaked = ctypes.c_int()
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                hwnd, _DWMWA_CLOAKED, ctypes.byref(cloaked),
+                ctypes.sizeof(cloaked)) == 0:
+            return bool(cloaked.value)
+    except Exception:  # noqa: BLE001 - unknown cloaking, treat as visible
+        pass
+    return False
+
+
+def _is_tool_window(hwnd: int) -> bool:
+    """True for WS_EX_TOOLWINDOW windows (floating toolbars, trays)."""
+    try:
+        import win32gui
+        return bool(win32gui.GetWindowLong(hwnd, _GWL_EXSTYLE)
+                    & _WS_EX_TOOLWINDOW)
+    except Exception:  # noqa: BLE001 - unknown style, treat as app window
+        pass
+    return False
 
 
 def _foreground_pid() -> int | None:
