@@ -29,7 +29,7 @@ from freezer import sessions
 from freezer.contracts import (Actuator, AppSnapshot, Blocked, Decision, FocusSession,
                                LedgerEntry, Plan, PolicyResult, PressureEvent)
 from freezer.watchdog import beat
-from freezer.planner import DEFAULT_EFFORT, DEFAULT_MODEL, SKIPPED_REASON, plan
+from freezer.planner import DEFAULT_EFFORT, DEFAULT_MODEL, SKIPPED_REASON, heuristic_plan, plan
 
 from freezer import audit
 
@@ -105,6 +105,15 @@ Policy = Callable[[list[str], list[AppSnapshot]], PolicyResult]
 
 
 @dataclass
+class Contrast:
+    """One app where the AI and the idle timer disagree: the demo's "AI vs timer" line."""
+    app_id: str
+    timer: Literal["keep", "freeze"]   # what the 20-min / 200 MB idle rule would do
+    ai: Literal["keep", "freeze"]
+    reason: str                        # the AI's reason, already shown on the card
+
+
+@dataclass
 class Proposal:
     """Everything the consent card shows."""
     plan: Plan
@@ -117,6 +126,7 @@ class Proposal:
     session: str | None = None
     thaw: list[Decision] = field(default_factory=list)  # frozen apps the new task needs back
     apps: dict[str, AppSnapshot] = field(default_factory=dict)  # display_name, MB for the card
+    vs_timer: list[Contrast] = field(default_factory=list)  # empty when the plan IS the timer
 
     @property
     def fallback_reason(self) -> str | None:
@@ -204,6 +214,12 @@ class FocusAgent:
             if d.action == "freeze":  # policy was silent: keep to be safe
                 d = Decision(d.app_id, "keep", POLICY_SILENT)
             keep.append(d)
+        vs_timer = []
+        if p.model != "heuristic":  # a simple-mode plan is the timer: nothing to contrast
+            timer = {d.app_id: d.action for d in heuristic_plan(task, snaps).decisions}
+            vs_timer = [Contrast(d.app_id, timer[d.app_id], d.action, d.reason)
+                        for d in p.decisions
+                        if d.app_id in timer and timer[d.app_id] != d.action and d.reason != SKIPPED_REASON]
         return Proposal(
             plan=p,
             to_freeze=to_freeze,
@@ -215,6 +231,7 @@ class FocusAgent:
             session=session.name if session else None,
             thaw=thaw,
             apps=by_id,
+            vs_timer=vs_timer,
         )
 
     def _execute(self, proposal: Proposal, approved: list[str]) -> Outcome:
@@ -392,7 +409,13 @@ class FocusAgent:
         """User: "I'm done". Thaw everything; works even if the planner is down."""
         self._beat()
         self.session_name = None
-        return self.actuator.thaw_all()
+        thawed = self.actuator.thaw_all()
+        try:  # the audit trail must never break the loop
+            for app_id in thawed:
+                audit.log("user", "thaw", app_id, "I'm done")
+        except Exception:
+            log.debug("audit log skipped", exc_info=True)
+        return thawed
 
 
 # ---- CLI (mock parts) -------------------------------------------------------
@@ -401,8 +424,6 @@ def _print_card(p: Proposal) -> None:
     n = len(p.to_freeze)
     head = f"Freeze {n} app{'' if n == 1 else 's'}, free ~{p.free_mb / 1024:.1f} GB?"
     print(f"\n{head}  [{p.plan.model}, ${p.plan.cost_usd:.5f}]")
-    if p.fallback_message:
-        print(f"  ! {p.fallback_message}")
     for d in p.to_freeze:
         warn = "  (will disconnect)" if d.app_id in p.disconnects else ""
         print(f"  [x] {d.app_id:24} {d.reason}{warn}")
@@ -412,6 +433,8 @@ def _print_card(p: Proposal) -> None:
         print(f"  keep {d.app_id:23} {d.reason}")
     for r in p.plan.proposed_rules:
         print(f"  suggested rule: {r.rule} {r.app_id} ({r.reason})")
+    for c in p.vs_timer:
+        print(f"  AI vs idle timer: {c.app_id}: timer would {c.timer}, AI says {c.ai} ({c.reason})")
 
 
 def _terminal_consent(auto_yes: bool) -> Consent:
@@ -420,7 +443,10 @@ def _terminal_consent(auto_yes: bool) -> Consent:
         ids = [d.app_id for d in p.to_freeze]
         if auto_yes:
             return ids
-        ans = input("Enter = freeze all, n = cancel, or app_ids to untick (comma-separated): ").strip()
+        try:
+            ans = input("Enter = freeze all, n = cancel, or app_ids to untick (comma-separated): ").strip()
+        except EOFError:  # no terminal attached: cancel, never freeze unasked
+            return None
         if ans.lower() == "n":
             return None
         untick = {a.strip() for a in ans.split(",") if a.strip()}
@@ -443,14 +469,21 @@ def _main() -> None:
     ap.add_argument("--yes", action="store_true", help="approve the card without asking")
     args = ap.parse_args()
 
+    try:
+        sensor = MockSensor(args.scenario)
+    except KeyError as e:
+        ap.error(str(e).strip("'\""))
     actuator = MockActuator()
-    agent = FocusAgent(MockSensor(args.scenario), mock_policy, actuator, _terminal_consent(args.yes),
-                       model=args.model, on_fallback=lambda w: print(f"[fallback] {w}"))
+    agent = FocusAgent(sensor, mock_policy, actuator, _terminal_consent(args.yes),
+                       model=args.model, on_fallback=lambda w: print(f"! {fallback_message(w)}"))
     out = agent.focus(args.task, args.session)
     for _ in range(3):  # vague task: the model asks, the user's answer becomes the task
         if not out.question or args.yes:
             break
-        answer = input(f"\nAgent asks: {out.question}\n> ").strip()
+        try:
+            answer = input(f"\nAgent asks: {out.question}\n> ").strip()
+        except EOFError:
+            break
         if not answer:
             break
         out = agent.focus(answer, args.session)

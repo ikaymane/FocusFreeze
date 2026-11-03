@@ -1,4 +1,6 @@
+import json
 import os
+import sys
 from dataclasses import replace
 
 import pytest
@@ -464,3 +466,55 @@ def test_cap_too_many_is_not_failed_and_rate_limit_holds(monkeypatch):
     assert [(b.app_id, b.rule) for b in out.skipped] == [("app2.exe", "rate_limited"),
                                                         ("app3.exe", "rate_limited")]
     assert [e.app_id for e in out.frozen] == ["app0.exe", "app1.exe"]
+
+
+def test_card_contrasts_the_ai_with_the_idle_timer():
+    from freezer.planner import heuristic_plan
+    sensor = MockSensor("thesis")
+    snaps = sensor.snapshot()
+    timer = {d.app_id: d.action for d in heuristic_plan("writing my thesis", snaps).decisions}
+    ai = {s.app_id: ("keep" if timer[s.app_id] == "freeze" else "freeze") for s in snaps
+          if not (s.is_foreground or s.plays_audio)}
+    client = FakeClient(freezing(sensor, {a for a, act in ai.items() if act == "freeze"}))
+    agent, actuator, seen, _ = make_agent("thesis", client)
+    out = agent.focus("writing my thesis")
+    vs = {c.app_id: (c.timer, c.ai) for c in out.proposal.vs_timer}
+    assert vs and all(timer[a] == t and t != a_ for a, (t, a_) in vs.items())
+    assert set(vs) == {a for a in ai if timer[a] != ai[a]}
+
+
+def test_no_contrast_when_the_plan_is_the_timer():
+    agent, actuator, seen, _ = make_agent("login_bug", FakeClient(RuntimeError("down")))
+    out = agent.focus("fixing the login bug")
+    assert out.proposal.plan.model == "heuristic" and out.proposal.vs_timer == []
+
+
+def test_done_writes_every_thaw_to_the_audit_log():
+    from freezer import audit
+    sensor = MockSensor("login_bug")
+    agent, actuator, _, _ = make_agent("login_bug", FakeClient(freezing(sensor, {"discord.exe", "steam.exe"})))
+    agent.focus("fixing the login bug")
+    thawed = agent.done()
+    lines = [json.loads(l) for l in audit.path().read_text(encoding="utf-8").splitlines()]
+    assert sorted(l["app_id"] for l in lines if l["action"] == "thaw") == sorted(thawed)
+    assert audit.verify()[0]
+
+
+def test_cli_rejects_unknown_scenario_without_traceback(capsys, monkeypatch):
+    from freezer import agent as agent_mod
+    monkeypatch.setattr(sys, "argv", ["agent", "task", "--scenario", "no_such_scenario"])
+    with pytest.raises(SystemExit) as e:
+        agent_mod._main()
+    assert e.value.code == 2 and "no_such_scenario" in capsys.readouterr().err
+
+
+def test_terminal_consent_without_stdin_cancels(monkeypatch):
+    from freezer import agent as agent_mod
+    def eof(*a):
+        raise EOFError
+    monkeypatch.setattr("builtins.input", eof)
+    sensor = MockSensor("login_bug")
+    agent = agent_mod.FocusAgent(sensor, mock_policy, MockActuator(), agent_mod._terminal_consent(False),
+                                 client=FakeClient(freezing(sensor, {"steam.exe"})))
+    out = agent.focus("fixing the login bug")
+    assert out.declined and out.frozen == []

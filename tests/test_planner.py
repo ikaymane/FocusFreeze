@@ -371,3 +371,13 @@ def test_lookalike_app_id_is_aliased():
     _, snaps = scenario("login_bug")
     snaps[0].app_id = "\u0441\u043ede.exe"  # Cyrillic letters posing as code.exe
     assert planner._shown_ids(snaps)[snaps[0].app_id] == "app-1.exe"
+
+
+@pytest.mark.parametrize("exe", ["taskmgr.exe", "textinputhost.exe", "applicationframehost.exe",
+                                 "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+                                 "searchhost.exe", "lockapp.exe"])
+def test_windows_parts_are_labelled_system_for_the_model(exe):
+    _, snaps = scenario("login_bug")
+    snaps[0].app_id = exe
+    app = json.loads(planner._snapshot_json(snaps[:1]))[0]
+    assert "system" in app["program"]

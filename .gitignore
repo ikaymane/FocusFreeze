@@ -13,3 +13,4 @@ htmlcov/
 demo/recordings/
 
 eval/results/redteam_home/
+.hypothesis/

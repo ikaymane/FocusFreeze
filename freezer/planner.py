@@ -63,7 +63,7 @@ except ModuleNotFoundError as e:
         raise  # B's module exists but is broken: fail loudly, don't downgrade privacy
     # Stopgap until B's redact() lands: strip the obvious private bits.
     REDACTOR = "stopgap"
-    log.warning("freezer.redact missing: using the stopgap redactor (emails, paths, long numbers only)")
+    log.info("freezer.redact missing: using the stopgap redactor (emails, paths, URLs, long numbers)")
     _REDACTIONS = [
         (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "<email>"),
         # Spaces included ("C:\Users\John Smith\a.docx"), up to the " - App" title separator
@@ -179,6 +179,15 @@ KNOWN_PROGRAMS = {
     "explorer.exe": "Windows shell, system component",
     "msmpeng.exe": "Microsoft Defender, security software",
     "securityhealthservice.exe": "Windows Security, security software",
+    # Windows parts that own windows, so a live sensor can list them. Same list as
+    # freezer/policy.py blocks: the planner keeps them, the policy has the last word.
+    "taskmgr.exe": "Task Manager, Windows system tool",
+    "textinputhost.exe": "Windows touch keyboard and text input, system component",
+    "applicationframehost.exe": "Windows app host (Calculator, Settings), system component",
+    "shellexperiencehost.exe": "Windows shell, system component",
+    "startmenuexperiencehost.exe": "Windows Start menu, system component",
+    "searchhost.exe": "Windows Search, system component",
+    "lockapp.exe": "Windows lock screen, system component",
 }
 # An app_id outside this shape (spaces, sentences, very long) is shown to the model as a
 # neutral alias and mapped back in code, so a hostile exe name carries no text (keep-05).
