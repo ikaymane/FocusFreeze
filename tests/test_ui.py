@@ -461,3 +461,32 @@ def test_live_never_seeds_the_made_up_sessions():
     assert sessions.load() == []
     seed_demo_sessions(live=False, live_planner=False)   # the mock desk still gets them
     assert any(s.auto_freeze for s in sessions.load())
+
+
+def test_snapshot_runs_off_the_gui_thread_and_lands_back_on_it(qapp):
+    """A live snapshot takes up to a second: on the GUI thread the gauge would stall."""
+    import threading
+
+    from ui.app import OffGui
+
+    gui = threading.current_thread()
+    ran_on, landed_on, got = [], [], []
+    gate = threading.Event()
+
+    def snapshot():
+        ran_on.append(threading.current_thread())
+        gate.wait(2)
+        return ["app.exe"]
+
+    off = OffGui()
+    try:
+        assert off.submit(snapshot, lambda r: (landed_on.append(threading.current_thread()), got.append(r)))
+        assert not off.submit(snapshot, got.append)   # still busy: that poll is skipped
+        gate.set()
+        wait_until(qapp, lambda: got)
+        assert ran_on[0] is not gui and landed_on == [gui] and got == [["app.exe"]]
+        assert off.submit(lambda: 1 / 0, got.append)  # a failing snapshot skips, then frees the slot
+        wait_until(qapp, lambda: off.submit(lambda: "ok", got.append))
+        wait_until(qapp, lambda: got[-1] == "ok")
+    finally:
+        off.shutdown()

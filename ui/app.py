@@ -16,6 +16,7 @@ would lock the tray menu, and Panic thaw must always work.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -49,6 +50,45 @@ from ui.stats import Stats, StatsCard
 from ui.voicebar import VoiceBar
 
 GUARDIAN_POLL_MS = 5000
+
+log = logging.getLogger(__name__)
+
+
+class OffGui(QObject):
+    """Runs one blocking call at a time on a worker; the result comes back on the GUI
+    thread. A live snapshot takes 0.2-1.1 s, enough to stall the gauge and cards."""
+    _done = Signal(object, object)
+
+    def __init__(self, name: str = "ff-sensor"):
+        super().__init__()
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+        self._busy = False
+        self._done.connect(self._deliver)   # queued: the worker never touches widgets
+
+    def submit(self, fn: Callable[[], object], then: Callable[[object], None]) -> bool:
+        """False when the last call is still running: that poll is skipped, not queued."""
+        if self._busy:
+            return False
+        self._busy = True
+
+        def work() -> None:
+            try:
+                result = fn()
+            except Exception:  # noqa: BLE001 - a failed snapshot skips one poll
+                log.exception("background call failed")
+                result = None
+            self._done.emit(then, result)
+
+        self._pool.submit(work)
+        return True
+
+    def _deliver(self, then, result) -> None:
+        self._busy = False
+        if result is not None:
+            then(result)
+
+    def shutdown(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
 
 class Controller(QObject):
@@ -478,26 +518,33 @@ def main() -> int:
         keep[:] = [picker]
         picker.present()
 
+    sensing = OffGui()
+    app.aboutToQuit.connect(sensing.shutdown)
+
     def simulate_pressure() -> None:
         if not args.live:
             ctl.sensor.age(300)   # guardian only offers apps idle 5+ minutes
             ctl.on_pressure(mocks.PRESSURE)
             return
-        # Real apps, ranked the way the guardian ranks them; only RAM is pretended.
-        frozen = {e.app_id for e in actuator.frozen()}
-        snaps = sorted((s for s in ctl.sensor.snapshot() if s.app_id not in frozen),
-                       key=lambda s: s.last_focus_s * s.working_set_mb, reverse=True)
-        ctl.on_pressure(PressureEvent(max(ram().pct, 85.0), 30.0, [s.app_id for s in snaps]))
 
-    def poll_guardian() -> None:
-        snaps = ctl.sensor.snapshot()
+        def offer(snaps) -> None:
+            # Real apps, ranked the way the guardian ranks them; only RAM is pretended.
+            frozen = {e.app_id for e in actuator.frozen()}
+            ranked = sorted((s for s in snaps if s.app_id not in frozen),
+                            key=lambda s: s.last_focus_s * s.working_set_mb, reverse=True)
+            ctl.on_pressure(PressureEvent(max(ram().pct, 85.0), 30.0, [s.app_id for s in ranked]))
+
+        if not sensing.submit(ctl.sensor.snapshot, offer):
+            ctl.status.emit("Still reading your apps, try again in a moment.")
+
+    def check_guardian(snaps) -> None:
         frozen = {e.app_id for e in actuator.frozen()}
         if event := guardian.poll(snaps, frozen):
             if not args.live:
                 ctl.sensor.age(300)
             ctl.on_pressure(event)
 
-    poll = QTimer(interval=GUARDIAN_POLL_MS, timeout=poll_guardian)
+    poll = QTimer(interval=GUARDIAN_POLL_MS, timeout=lambda: sensing.submit(ctl.sensor.snapshot, check_guardian))
     poll.start()
 
     voicebar = VoiceBar(mocks.TRANSCRIPTS if not args.live_planner else None)
