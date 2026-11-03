@@ -270,25 +270,43 @@ def listen_once(scripted: list[str] | None = None, max_s: float = 6.0, silence_s
 
 # ---- Win32 hotkey ----------------------------------------------------------
 
-MOD_ALT, MOD_CONTROL, MOD_NOREPEAT = 0x1, 0x2, 0x4000
-VK_SPACE = 0x20
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x4000
+VK_SPACE, VK_V = 0x20, 0x56
 WM_HOTKEY, WM_QUIT = 0x0312, 0x0012
+
+# Tried in order; the first one free wins. Other apps (launchers, AI quick-entry
+# boxes) like to grab Ctrl+Alt+Space, and voice must not die with it.
+HOTKEYS: tuple[tuple[str, int, int], ...] = (
+    ("Ctrl+Alt+Space", MOD_CONTROL | MOD_ALT, VK_SPACE),
+    ("Ctrl+Shift+Space", MOD_CONTROL | MOD_SHIFT, VK_SPACE),
+    ("Ctrl+Alt+V", MOD_CONTROL | MOD_ALT, VK_V),
+)
 
 
 class HoldHotkey:
-    """Ctrl+Alt+Space, global. RegisterHotKey sees the press; release is polled."""
+    """Push-to-talk, global. RegisterHotKey sees the press; release is polled.
+
+    Takes the first free combo in HOTKEYS. If all are taken, voice is off and
+    registration is retried every RETRY_S, so closing the other app brings it back.
+    """
+
+    RETRY_S = 2.0
+    combos = HOTKEYS
 
     def __init__(self, on_press: Callable[[], None], on_release: Callable[[], None],
-                 on_error: Callable[[str], None]):
-        self.on_press, self.on_release, self.on_error = on_press, on_release, on_error
+                 on_status: Callable[[str], None]):
+        self.on_press, self.on_release, self.on_status = on_press, on_release, on_status
         self._thread = threading.Thread(target=self._loop, daemon=True, name="ff-hotkey")
         self._thread_id = 0
+        self._stopped = threading.Event()
+        self.active: str | None = None   # label of the combo we hold
 
     def start(self) -> None:
         self._thread.start()
 
     def stop(self) -> None:
         import ctypes
+        self._stopped.set()
         if self._thread_id:
             ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
 
@@ -298,14 +316,27 @@ class HoldHotkey:
 
         user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
         self._thread_id = kernel32.GetCurrentThreadId()
-        if not user32.RegisterHotKey(None, 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE):
-            self.on_error("Ctrl+Alt+Space is taken by another app. Voice is off.")
-            return
+        blocked = False
+        while True:
+            held = next(((label, vk) for label, mods, vk in self.combos
+                         if user32.RegisterHotKey(None, 1, mods | MOD_NOREPEAT, vk)), None)
+            if held:
+                break
+            if not blocked:
+                names = ", ".join(label for label, _, _ in self.combos)
+                self.on_status(f"{names} are all taken by other apps. "
+                               "Voice is off until one is free.")
+                blocked = True
+            if self._stopped.wait(self.RETRY_S):
+                return
+        self.active, vk_hold = held
+        if blocked or self.active != self.combos[0][0]:
+            self.on_status(f"Voice is on. Hold {self.active} and speak.")
         msg = wintypes.MSG()
         try:
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == WM_HOTKEY:
-                    self._hold(lambda: bool(user32.GetAsyncKeyState(VK_SPACE) & 0x8000))
+                    self._hold(lambda: bool(user32.GetAsyncKeyState(vk_hold) & 0x8000))
         finally:
             user32.UnregisterHotKey(None, 1)
 
@@ -323,7 +354,7 @@ class HoldHotkey:
         except Exception as e:  # noqa: BLE001 - see _hold
             log.exception("hotkey %s failed", what)
             try:
-                self.on_error(f"Voice failed ({type(e).__name__}). Try again.")
+                self.on_status(f"Voice failed ({type(e).__name__}). Try again.")
             except Exception:  # noqa: BLE001
                 log.exception("hotkey error report failed")
 
