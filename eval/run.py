@@ -147,7 +147,9 @@ def main() -> None:
         print(f"model-only accuracy {api_correct}/{api_total} = {summary['accuracy_model_only']:.0%} "
               f"({summary['fallbacks']} scenarios fell back and are excluded)")
 
-    if args.out or not args.only:
+    if args.offline and not args.out:
+        print("offline run: results not saved (pass --out to save them)")
+    elif args.out or not args.only:
         out = Path(args.out) if args.out else EVAL_DIR / "results" / "latest.json"
         out.parent.mkdir(exist_ok=True)
         out.write_text(json.dumps({"ts": time.time(), "summary": summary, "results": results}, indent=1),

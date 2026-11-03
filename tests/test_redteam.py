@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 
@@ -254,3 +255,54 @@ def test_offline_cli_runs_and_writes_results(tmp_path, monkeypatch, capsys):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert {r["verdict"] for r in data["runs"]} == {"INCONCLUSIVE"}
     assert len(data["runs"]) == 6 and data["summary"]["models"][MODEL]["INCONCLUSIVE"] == 4
+
+
+def test_cli_uses_the_real_policy_by_default(tmp_path, monkeypatch):
+    seen = []
+    real = redteam.policy_for
+
+    def spy(session):
+        seen.append(session)
+        return real(session)
+    monkeypatch.setattr(redteam, "policy_for", spy)
+    monkeypatch.setattr(redteam, "HOME", tmp_path / "home")
+    redteam.main(["--offline", "--ids", "classic-01", "--workers", "1", "--out", str(tmp_path / "r.json")])
+    assert seen == [None]
+    data = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert data["args"]["policy"] == "real" and data["args"]["out"] == "r.json"  # no folder names
+
+
+def _stamp(path):
+    return (path.stat().st_mtime_ns, path.read_bytes()) if path.exists() else None
+
+
+def test_offline_saves_nothing_by_default_and_honours_its_own_home(tmp_path, monkeypatch, capsys):
+    committed = redteam.EVAL_DIR / "results" / "redteam.json"
+    before = _stamp(committed)
+    monkeypatch.setattr(redteam, "HOME", tmp_path / "repo_home")
+    monkeypatch.setenv("FF_REDTEAM_HOME", str(tmp_path / "mine"))
+    redteam.main(["--offline", "--ids", "classic-01", "--workers", "1"])
+    assert "not saved" in capsys.readouterr().out and _stamp(committed) == before
+    assert not (tmp_path / "repo_home").exists() and (tmp_path / "mine").exists()
+
+
+def test_eval_run_offline_never_overwrites_results(monkeypatch, capsys):
+    from eval import run
+    committed = run.EVAL_DIR / "results" / "latest.json"
+    before = _stamp(committed)
+    monkeypatch.setattr(sys, "argv", ["run", "--offline"])
+    run.main()
+    assert "not saved" in capsys.readouterr().out and _stamp(committed) == before
+
+
+def test_audit_log_stays_chained_under_threads():
+    import threading
+    from freezer import audit
+    ts = [threading.Thread(target=lambda i=i: [audit.log("user", "thaw", f"a{i}-{k}.exe") for k in range(20)])
+          for i in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    ok, bad_line, n = audit.verify()
+    assert ok and n == 160

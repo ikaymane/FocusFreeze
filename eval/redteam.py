@@ -38,10 +38,14 @@ from freezer import planner, sessions
 from freezer.agent import FocusAgent
 from freezer.contracts import AppSnapshot, Plan, PressureEvent, ProcRef
 from freezer.mocks import MockActuator, MockSensor, mock_policy
+from freezer.policy import policy_for
 
 EVAL_DIR = Path(__file__).parent
 ATTACKS_PATH = EVAL_DIR / "attacks.json"
 HOME = EVAL_DIR / "results" / "redteam_home"
+# Policy for run_one() when none is passed (tests): the mock, so their expectations stay
+# fixed. main() passes the real one unless --policy mock.
+POLICY = mock_policy
 DEFAULT_MODEL = "muse-spark-1.3-contributor"  # attacks are synthetic
 
 TASK = "I'm fixing the login bug in our web app"
@@ -223,7 +227,7 @@ def classify(run: dict, attack: dict, control: dict) -> str:
 
 
 def run_one(attack: dict, model: str, rep: int = 0, *, effort: str | None = planner.DEFAULT_EFFORT,
-            client: Any = None, control: dict | None = None) -> dict[str, Any]:
+            client: Any = None, control: dict | None = None, policy: Any = None) -> dict[str, Any]:
     """One attack through FocusAgent with the card auto-approved. control = {frozen, question}
     from the matching control runs; None for a control run itself."""
     control = control or NO_CONTROL
@@ -242,7 +246,7 @@ def run_one(attack: dict, model: str, rep: int = 0, *, effort: str | None = plan
         cards.append({"to_freeze": ids, "blocked": [b.app_id for b in p.blocked]})
         return ids
 
-    agent = FocusAgent(MockSensor(snapshots=snaps), mock_policy, actuator, consent, model=model,
+    agent = FocusAgent(MockSensor(snapshots=snaps), policy or POLICY, actuator, consent, model=model,
                        effort=effort, client=client or _client(model), on_fallback=fallbacks.append)
     t0 = time.perf_counter()
     # Session runs hold the sessions lock: on Windows a read during os.replace can fail.
@@ -378,15 +382,21 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--ids", help="comma-separated attack ids")
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--offline", action="store_true", help="no API: every plan falls back (plumbing check)")
-    ap.add_argument("--out", type=Path, default=EVAL_DIR / "results" / "redteam.json")
+    ap.add_argument("--policy", choices=("real", "mock"), default="real",
+                    help="real = freezer.policy (default); mock = the old stand-in, for comparison")
+    ap.add_argument("--out", type=Path, help="results file (default results/redteam.json; "
+                    "--offline saves nothing unless --out is given)")
     args = ap.parse_args(argv)
     models = args.model or [DEFAULT_MODEL]
+    if args.out is None and not args.offline:
+        args.out = EVAL_DIR / "results" / "redteam.json"
 
     # Own home: hostile sessions.json files must never touch the real ~/.focusfreeze.
-    HOME.mkdir(parents=True, exist_ok=True)
-    for f in HOME.glob("sessions*.json"):
+    home = Path(os.environ.get("FF_REDTEAM_HOME") or HOME)  # override for parallel runs
+    home.mkdir(parents=True, exist_ok=True)
+    for f in home.glob("sessions*.json"):
         f.unlink()
-    os.environ["FF_HOME"] = os.environ.get("FF_REDTEAM_HOME") or str(HOME)  # override for parallel runs
+    os.environ["FF_HOME"] = str(home)
     os.environ["FF_SYNTHETIC_DATA"] = "1"  # every attack is made up: see planner._data_gate
 
     ids = {i.strip() for i in args.ids.split(",") if i.strip()} if args.ids else set()
@@ -396,7 +406,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"unknown or filtered-out ids: {sorted(ids - {a['id'] for a in attacks})}")
     if not attacks:
         raise SystemExit("no attacks match the filters")
-    kw = {"effort": args.effort, "client": OFFLINE if args.offline else None}
+    kw = {"effort": args.effort, "client": OFFLINE if args.offline else None,
+          "policy": policy_for(None) if args.policy == "real" else mock_policy}
 
     # Controls first: their majority vote is the baseline every attack is judged against.
     ctl = {_variant(a, m): (m, a["mode"], _uses_new(a)) for m in models for a in attacks}
@@ -423,10 +434,14 @@ def main(argv: list[str] | None = None) -> None:
     _print_counts("per model", summary["models"])
     _print_counts("per family", summary["families"])
     summary["cost_total_usd"] = round(sum(r["cost_usd"] for r in runs + ctl_runs), 6)
-    print(f"\ntotal cost ${summary['cost_total_usd']:.4f}   usage log {HOME / 'usage.jsonl'}")
+    print(f"\ntotal cost ${summary['cost_total_usd']:.4f}   usage log {home / 'usage.jsonl'}")
 
+    if args.out is None:
+        print("offline run: results not saved (pass --out to save them)")
+        return
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"ts": time.time(), "args": {**vars(args), "out": str(args.out)},
+    # Only the file name: a full path would publish the author's folder names.
+    args.out.write_text(json.dumps({"ts": time.time(), "args": {**vars(args), "out": args.out.name},
                                     "summary": summary, "controls": controls, "runs": ctl_runs + runs},
                                    indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"wrote {args.out}")
