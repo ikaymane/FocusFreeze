@@ -399,7 +399,7 @@ def test_voice_drawer_slides_out_under_the_gauge_and_tucks_back(qapp):
     bar.set_listening(False)
     bar.show_transcript("I'm fixing the login bug")            # last words, then it goes
     wait_until(qapp, lambda: not bar.isVisible())
-    assert not bar.opened and bar.transcript.text() == "Hold Ctrl+Alt+Space and speak"
+    assert not bar.opened and bar.transcript.text() == bar.hint()
     bar.close()
 
 
@@ -415,6 +415,21 @@ def test_gauge_blends_instead_of_snapping(qapp):
     g.set_listening(False)
     wait_until(qapp, lambda: g._listen_t == 0.0)                                # and gives it back
     wait_until(qapp, lambda: not any(i is g for i in fx.ticker()._items))      # settles: no idle CPU
+    g.close()
+
+
+def test_hints_name_the_hotkey_the_app_got(qapp):
+    bar = VoiceBar(None)
+    assert bar.transcript.text() == "Hold Ctrl+Alt+Space and speak"
+    bar.set_hotkey("Ctrl+Shift+Space")
+    assert bar.transcript.text() == "Hold Ctrl+Shift+Space and speak"
+    bar.show_transcript("I'm fixing the login bug")
+    bar.set_hotkey("Ctrl+Alt+V")                                   # never overwrites what you said
+    assert bar.transcript.text() == "I'm fixing the login bug"
+    bar.close()
+    g = Gauge(lambda: Ram(47.7, 15.1, 31.75))
+    g.set_hotkey("Ctrl+Shift+Space")
+    assert g._status_text("") == "Hold Ctrl+Shift+Space and say what you're working on"
     g.close()
 
 

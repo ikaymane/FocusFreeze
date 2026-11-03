@@ -189,3 +189,37 @@ def test_hotkey_survives_press_and_release_errors():
     hk._hold(lambda: next(held))   # must not raise
     assert calls == ["press", "release"]
     assert errors == ["Voice failed (RuntimeError). Try again.", "Voice failed (ValueError). Try again."]
+
+
+def test_hotkey_reports_the_combo_it_got_when_the_first_is_taken():
+    """Another app holds the first combo: voice falls back, and says which key to use."""
+    import ctypes
+    import threading
+    import time
+
+    first = ("Ctrl+Alt+F9", voice.MOD_CONTROL | voice.MOD_ALT, 0x78)
+    second = ("Ctrl+Alt+F10", voice.MOD_CONTROL | voice.MOD_ALT, 0x79)
+    held, release = threading.Event(), threading.Event()
+
+    def other_app():
+        u = ctypes.windll.user32
+        u.RegisterHotKey(None, 50, first[1], first[2])
+        held.set()
+        release.wait()
+        u.UnregisterHotKey(None, 50)
+
+    threading.Thread(target=other_app, daemon=True).start()
+    held.wait(2)
+    ready, status = [], []
+    hk = voice.HoldHotkey(lambda: None, lambda: None, status.append, on_ready=ready.append)
+    hk.combos = (first, second)
+    try:
+        hk.start()
+        deadline = time.monotonic() + 3
+        while not ready and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready == ["Ctrl+Alt+F10"] and hk.active == "Ctrl+Alt+F10"
+        assert status == ["Voice is on. Hold Ctrl+Alt+F10 and speak."]
+    finally:
+        hk.stop()
+        release.set()

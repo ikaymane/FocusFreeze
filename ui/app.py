@@ -103,6 +103,7 @@ class Controller(QObject):
     stats_ready = Signal(object)
     card_opened = Signal(object)
     transcript = Signal(str)
+    hotkey_ready = Signal(str)            # the voice combo we got: hints name it
     _show_card = Signal(object, object)
     _show_question = Signal(str, object)
     _voice_text = Signal(str, float)
@@ -633,13 +634,16 @@ def main() -> int:
     poll.start()
 
     # Tucked under the gauge; slides out while you talk, or when you click the gauge to type.
-    voicebar = VoiceBar(mocks.TRANSCRIPTS if not args.live_planner else None, anchor=gauge.frameGeometry)
+    demo_phrases = None if args.live or args.live_planner else mocks.TRANSCRIPTS   # --live implies --live-planner
+    voicebar = VoiceBar(demo_phrases, anchor=gauge.frameGeometry)
     voicebar.spoken.connect(ctl.handle_transcript)
     ctl.transcript.connect(voicebar.show_transcript)
     ctl.listening.connect(voicebar.set_listening)
     ctl.card_opened.connect(lambda _card: voicebar.close_drawer())   # the agent has it now
     gauge.clicked.connect(voicebar.toggle)
     gauge.moved.connect(voicebar.follow)
+    ctl.hotkey_ready.connect(voicebar.set_hotkey)
+    ctl.hotkey_ready.connect(gauge.set_hotkey)
     voicebar.present()
 
     menu = QMenu()
@@ -676,7 +680,7 @@ def main() -> int:
             ctl.voice_heard(listen_once(scripted))
             scripted.append(scripted.pop(0))
 
-    hotkey = HoldHotkey(press, release, ctl.status.emit)
+    hotkey = HoldHotkey(press, release, ctl.status.emit, on_ready=ctl.hotkey_ready.emit)
     hotkey.start()
 
     app.aboutToQuit.connect(hotkey.stop)

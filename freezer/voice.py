@@ -31,7 +31,7 @@ KEYWORDS = ["focus", "freeze", "session", "I'm done", "bring them back"]
 MAX_HOLD_S = 60              # a stuck key must not stream (and bill) forever
 CLOSE_TIMEOUT_S = 8         # after endStream: longer than this and the server has gone silent
 USD_PER_MINUTE = 0.003
-NOT_CAUGHT = "Didn't catch that. Hold Ctrl+Alt+Space and try again."
+NOT_CAUGHT = "Didn't catch that. Hold the voice key and try again."
 
 
 # ---- Commands --------------------------------------------------------------
@@ -294,8 +294,9 @@ class HoldHotkey:
     combos = HOTKEYS
 
     def __init__(self, on_press: Callable[[], None], on_release: Callable[[], None],
-                 on_status: Callable[[str], None]):
+                 on_status: Callable[[str], None], on_ready: Callable[[str], None] | None = None):
         self.on_press, self.on_release, self.on_status = on_press, on_release, on_status
+        self.on_ready = on_ready         # told which combo we got, so hints can name it
         self._thread = threading.Thread(target=self._loop, daemon=True, name="ff-hotkey")
         self._thread_id = 0
         self._stopped = threading.Event()
@@ -330,6 +331,8 @@ class HoldHotkey:
             if self._stopped.wait(self.RETRY_S):
                 return
         self.active, vk_hold = held
+        if self.on_ready:
+            self.on_ready(self.active)
         if blocked or self.active != self.combos[0][0]:
             self.on_status(f"Voice is on. Hold {self.active} and speak.")
         msg = wintypes.MSG()
