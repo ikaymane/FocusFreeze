@@ -11,7 +11,9 @@ that is another windowed app and everything under it (see :func:`_prune`). Only 
 alive at sampling time are emitted; a PID that dies mid-sample is skipped,
 never guessed (sampling instant documented for the U1 audit gap).
 
-Fail-closed choices: elevation unknown -> elevated (policy then blocks);
+Fail-closed choices: elevation of a living-but-unreadable process ->
+elevated (policy then blocks); a dead PID reads as not elevated (a process
+that exited mid-sample must not brand its app "Running as administrator");
 idle unknown -> 0.0 s (recently used: the guardian leaves it alone until
 the :class:`ForegroundTracker` has watched it idle); audio/network lookup
 failure -> False, documented (warning UX, not a safety gate).
@@ -174,7 +176,12 @@ def _working_set_mb(procs: list[psutil.Process]) -> float:
 
 
 def _is_elevated(pid: int) -> bool:
-    """Token-elevation check; True (blocked) when it cannot be answered."""
+    """Token-elevation check.
+
+    A PID that died mid-sample is not elevated (it will be skipped
+    downstream); only a living process we are denied to read stays
+    fail-closed, so a normal app never reads as "Running as administrator".
+    """
     try:
         import win32api
         import win32security
@@ -189,8 +196,11 @@ def _is_elevated(pid: int) -> bool:
                 win32api.CloseHandle(token)
         finally:
             win32api.CloseHandle(handle)
-    except Exception:  # noqa: BLE001 - fail closed, see module docstring
-        return True
+    except Exception:  # noqa: BLE001 - dead PID reads clean, see docstring
+        try:
+            return psutil.pid_exists(pid)
+        except Exception:  # noqa: BLE001 - liveness itself unknown: closed
+            return True
 
 
 def _has_network(procs: list[psutil.Process]) -> bool:
