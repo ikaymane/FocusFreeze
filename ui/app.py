@@ -632,9 +632,14 @@ def main() -> int:
     poll = QTimer(interval=GUARDIAN_POLL_MS, timeout=lambda: sensing.submit(ctl.sensor.snapshot, check_guardian))
     poll.start()
 
-    voicebar = VoiceBar(mocks.TRANSCRIPTS if not args.live_planner else None)
+    # Tucked under the gauge; slides out while you talk, or when you click the gauge to type.
+    voicebar = VoiceBar(mocks.TRANSCRIPTS if not args.live_planner else None, anchor=gauge.frameGeometry)
     voicebar.spoken.connect(ctl.handle_transcript)
     ctl.transcript.connect(voicebar.show_transcript)
+    ctl.listening.connect(voicebar.set_listening)
+    ctl.card_opened.connect(lambda _card: voicebar.close_drawer())   # the agent has it now
+    gauge.clicked.connect(voicebar.toggle)
+    gauge.moved.connect(voicebar.follow)
     voicebar.present()
 
     menu = QMenu()

@@ -373,6 +373,77 @@ def test_voice_bar_routes_buttons_and_typing(qapp):
     bar.close()
 
 
+def test_voice_drawer_slides_out_under_the_gauge_and_tucks_back(qapp):
+    from PySide6.QtCore import QRect
+
+    from ui import gauge, voicebar
+    gw, gh, gap = gauge.W, gauge.H, voicebar.GAP
+    gauge_rect = [QRect(1000, 20, gw, gh)]
+    bar = VoiceBar(mocks.TRANSCRIPTS, anchor=lambda: gauge_rect[0])
+    bar._linger.setInterval(50)
+    bar.present()
+    assert not bar.isVisible()                                 # nothing until you talk
+
+    bar.set_listening(True)
+    wait_until(qapp, lambda: bar._t == 1.0)
+    assert bar.isVisible() and bar.pos().x() == 1000 and bar.pos().y() == 20 + gh + gap  # right under it
+    qapp.processEvents()
+    bar.show_transcript("I'm fixing the login")
+    time.sleep(0.1); qapp.processEvents()
+    assert bar.opened                                          # never tucks mid-sentence
+
+    gauge_rect[0] = QRect(400, 300, gw, gh)                  # gauge dragged
+    bar.follow()
+    assert bar.pos().x() == 400 and bar.pos().y() == 300 + gh + gap
+
+    bar.set_listening(False)
+    bar.show_transcript("I'm fixing the login bug")            # last words, then it goes
+    wait_until(qapp, lambda: not bar.isVisible())
+    assert not bar.opened and bar.transcript.text() == "Hold Ctrl+Alt+Space and speak"
+    bar.close()
+
+
+def test_gauge_blends_instead_of_snapping(qapp):
+    g = Gauge(lambda: Ram(47.7, 15.1, 31.75))
+    g.show()
+    wait_until(qapp, lambda: g._enter_t == 1.0 and g.windowOpacity() > 0.99)   # faded in
+    g.set_status("Asking Muse Spark...")
+    assert g._status_t == 0.0 and g._status_prev == ""                          # crossfade starts
+    wait_until(qapp, lambda: g._status_t == 1.0)
+    g.set_listening(True)
+    wait_until(qapp, lambda: g._listen_t > 0.99)                                # wave takes the slot
+    g.set_listening(False)
+    wait_until(qapp, lambda: g._listen_t == 0.0)                                # and gives it back
+    wait_until(qapp, lambda: not any(i is g for i in fx.ticker()._items))      # settles: no idle CPU
+    g.close()
+
+
+def test_gauge_click_toggles_the_drawer_for_typing(qapp):
+    from PySide6.QtCore import QRect
+
+    bar = VoiceBar(None, anchor=lambda: QRect(0, 0, 300, 164))
+    bar.present()
+    bar.toggle()
+    wait_until(qapp, lambda: bar._t == 1.0)
+    assert bar.opened and not bar.phrase_buttons               # live: no fake phrases
+    bar.toggle()
+    wait_until(qapp, lambda: not bar.isVisible())
+    bar.close()
+
+
+def test_phrase_chips_wrap_instead_of_clipping(qapp):
+    bar = VoiceBar(mocks.TRANSCRIPTS)
+    bar.present()
+    bar.show()
+    qapp.processEvents()
+    room = bar.frame.contentsRect().width() - 44   # the body's side margins
+    for btn in bar.phrase_buttons:   # in full, unless a phrase is wider than the drawer itself
+        assert btn.width() >= min(btn.sizeHint().width(), room), btn.text()
+        assert btn.height() >= btn.sizeHint().height(), btn.text()
+    assert len({b.y() for b in bar.phrase_buttons}) >= 2           # wrapped onto rows
+    bar.close()
+
+
 def test_gauge_waits_for_the_chip_then_lands_on_the_spec_values(qapp):
     ram = [Ram(91.3, 3.74, 4.0)]
     g = Gauge(lambda: ram[0])
