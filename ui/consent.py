@@ -22,6 +22,25 @@ WIDTH, HEIGHT = 640, 560
 WARNING_MARK = "⚠"
 DISCONNECT_NOTE = f"{WARNING_MARK} may disconnect, reconnects on restore"
 ROW_DELAY_S = 0.028
+
+# What people call the apps the live sensor reports by exe. Display only: the planner,
+# policy and blocked lines all keep the exact app_id.
+FRIENDLY = {
+    "chrome.exe": "Google Chrome", "msedge.exe": "Microsoft Edge", "firefox.exe": "Firefox",
+    "code.exe": "Visual Studio Code", "windowsterminal.exe": "Windows Terminal",
+    "explorer.exe": "File Explorer", "notepad.exe": "Notepad", "winword.exe": "Microsoft Word",
+    "excel.exe": "Microsoft Excel", "powerpnt.exe": "PowerPoint", "acrord32.exe": "Adobe Acrobat Reader",
+    "acrobat.exe": "Adobe Acrobat", "zotero.exe": "Zotero", "discord.exe": "Discord",
+    "ms-teams.exe": "Microsoft Teams", "slack.exe": "Slack", "spotify.exe": "Spotify",
+    "steam.exe": "Steam", "steamwebhelper.exe": "Steam", "whatsapp.root.exe": "WhatsApp",
+    "obs64.exe": "OBS Studio", "vlc.exe": "VLC",
+}
+
+
+def app_name(app_id: str, app=None) -> str:
+    if app is not None and app.display_name and app.display_name.lower() != app_id.lower():
+        return app.display_name   # the sensor already has a better name
+    return FRIENDLY.get(app_id.lower(), app_id)
 ROW_FADE_S = 0.24
 SETTLE_S = 0.34        # rows dim one by one once approved
 LEAVE_S = 0.18
@@ -113,7 +132,7 @@ class ConsentCard(Card):
             app = self.apps.get(d.app_id)
             warn = d.app_id in proposal.disconnects
             warned = warned or warn
-            row = _AppRow(self, d.app_id, app.display_name if app else d.app_id,
+            row = _AppRow(self, d.app_id, app_name(d.app_id, app),
                           app.working_set_mb if app else 0.0, d.reason, warn)
             self.rows.append(row)
             rows.addWidget(row)
@@ -180,8 +199,7 @@ class ConsentCard(Card):
         self.refresh()
 
     def _name(self, app_id: str) -> str:
-        app = self.apps.get(app_id)
-        return app.display_name if app else app_id
+        return app_name(app_id, self.apps.get(app_id))
 
     @staticmethod
     def _keep_line(name: str, why: str) -> QWidget:

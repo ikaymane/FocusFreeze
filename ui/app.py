@@ -2,6 +2,10 @@
 
     python -m ui.app                 # the demo desk on mock parts, offline
     python -m ui.app --live-planner  # same desk, real Muse Spark (titles are made up)
+    python -m ui.app --live          # real sensor, policy and actuator: suspends real apps
+
+--live starts a watchdog process that thaws everything if this one dies. Set
+FF_HOME to a scratch folder for demos, or it defaults to a fresh temp one.
 
 Threads: the agent runs on one worker because planning and freezing block. It
 waits inside consent() while the card is open on the GUI thread. Thawing never
@@ -13,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -31,6 +36,7 @@ from freezer.agent import FocusAgent, Outcome, Proposal
 from freezer.contracts import Actuator, PressureEvent
 from freezer.guardian import Guardian
 from freezer.planner import DEFAULT_MODEL
+from freezer.watchdog import Heartbeat
 from freezer.voice import Command, HoldHotkey, PushToTalk, Speaker, listen_once, parse_command
 from ui import mocks, theme
 from ui.cards import PromptCard
@@ -385,8 +391,17 @@ def connect_gauge(ctl: Controller, gauge: Gauge, overlay: MotionOverlay,
     ctl.thawed.connect(thawed)
 
 
-def make_parts(live_planner: bool) -> dict:
+def make_parts(live_planner: bool, live: bool = False) -> dict:
     """The one place to swap mocks for the real parts."""
+    if live:
+        from freezer.actuator import RealActuator
+        from freezer.policy import policy_for
+        from freezer.sensor import ForegroundTracker, RealSensor
+        # Real titles: the default model, never the contributor one, which trains on
+        # what it receives. The tracker supplies the idle times the guardian needs.
+        return dict(sensor=RealSensor(ForegroundTracker().start()),
+                    policy=policy_for(None, self_pids={os.getpid(), os.getppid()}),
+                    actuator=RealActuator())
     if not live_planner:
         mocks.install()
     os.environ.setdefault("FF_SYNTHETIC_DATA", "1")  # the desk's titles are made up; remove with the real sensor
@@ -399,23 +414,43 @@ def make_parts(live_planner: bool) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Focus Freeze tray app, on mock parts.")
     ap.add_argument("--live-planner", action="store_true", help="call Muse Spark instead of the mock plan")
+    ap.add_argument("--live", action="store_true",
+                    help="real sensor, policy and actuator (implies --live-planner)")
     args = ap.parse_args()
 
-    if not args.live_planner:
+    if args.live:
+        from freezer.actuator import AdminRefusal, ensure_not_elevated
+        try:
+            ensure_not_elevated()
+        except AdminRefusal as e:
+            print(e, file=sys.stderr)
+            return 2
+        os.environ.setdefault("FF_HOME", tempfile.mkdtemp(prefix="ff-live-"))
+    elif not args.live_planner:
         os.environ["FF_HOME"] = tempfile.mkdtemp(prefix="ff-demo-")  # demo data never touches real sessions
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     speaker = Speaker()
-    parts = make_parts(args.live_planner)
+    parts = make_parts(args.live_planner, args.live)
     actuator = parts["actuator"]
     if not args.live_planner:
-        mocks.seed_sessions()
-    guardian = Guardian(ram_pct=lambda: mocks.ram_for(actuator).pct)
-    ctl = Controller(**parts, speak=speaker.say, read_ram=lambda: mocks.ram_for(actuator),
-                     on_guardian_dismiss=guardian.dismissed)
+        mocks.seed_sessions()   # synthetic sessions, also in --live
     actuator.thaw_all()  # contract: recover anything a crashed run left frozen
+    if args.live:
+        ram = read_ram
+        guardian = Guardian()
+        heartbeat = Heartbeat()
+        heartbeat.start()
+        app.aboutToQuit.connect(heartbeat.stop)
+        # Its own process: it thaws when the heartbeat goes stale or this process exits.
+        subprocess.Popen([sys.executable, "-m", "freezer.watchdog", "--parent", str(os.getpid())],
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    else:
+        ram = lambda: mocks.ram_for(actuator)
+        guardian = Guardian(ram_pct=lambda: ram().pct)
+    ctl = Controller(**parts, speak=speaker.say, read_ram=ram, on_guardian_dismiss=guardian.dismissed)
 
-    gauge = Gauge(ctl.read_ram, simulated=True)
+    gauge = Gauge(ctl.read_ram, simulated=not args.live)
     overlay = MotionOverlay()
     if screen := app.primaryScreen():
         overlay.setGeometry(screen.geometry())
@@ -438,14 +473,22 @@ def main() -> int:
         picker.present()
 
     def simulate_pressure() -> None:
-        ctl.sensor.age(300)   # guardian only offers apps idle 5+ minutes
-        ctl.on_pressure(mocks.PRESSURE)
+        if not args.live:
+            ctl.sensor.age(300)   # guardian only offers apps idle 5+ minutes
+            ctl.on_pressure(mocks.PRESSURE)
+            return
+        # Real apps, ranked the way the guardian ranks them; only RAM is pretended.
+        frozen = {e.app_id for e in actuator.frozen()}
+        snaps = sorted((s for s in ctl.sensor.snapshot() if s.app_id not in frozen),
+                       key=lambda s: s.last_focus_s * s.working_set_mb, reverse=True)
+        ctl.on_pressure(PressureEvent(max(ram().pct, 85.0), 30.0, [s.app_id for s in snaps]))
 
     def poll_guardian() -> None:
         snaps = ctl.sensor.snapshot()
         frozen = {e.app_id for e in actuator.frozen()}
         if event := guardian.poll(snaps, frozen):
-            ctl.sensor.age(300)
+            if not args.live:
+                ctl.sensor.age(300)
             ctl.on_pressure(event)
 
     poll = QTimer(interval=GUARDIAN_POLL_MS, timeout=poll_guardian)
@@ -461,7 +504,8 @@ def main() -> int:
                        f"QMenu::item {{ padding: 6px 22px; }} QMenu::item:selected {{ background: {theme.LINE}; }}")
     for text, slot in (("Focus...", ctl.open_focus_prompt), ("Done", ctl.done),
                        ("Sessions", open_sessions), ("Panic thaw", ctl.panic),
-                       ("Simulate RAM pressure (mock)", simulate_pressure), ("Quit", app.quit)):
+                       ("Simulate RAM pressure" if args.live else "Simulate RAM pressure (mock)",
+                        simulate_pressure), ("Quit", app.quit)):
         menu.addAction(QAction(text, menu, triggered=slot))
     tray = QSystemTrayIcon(tray_icon())
     tray.setToolTip("Focus Freeze")

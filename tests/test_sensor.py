@@ -84,6 +84,42 @@ def test_dead_and_nameless_windows_skipped(monkeypatch):
     assert [s.app_id for s in snaps] == ["real.exe"]
 
 
+def test_launcher_never_owns_the_apps_it_started(monkeypatch):
+    """explorer.exe -> code.exe -> powershell.exe: code is its own app, and its
+    windowless shell stays with code, never with the launcher."""
+    procs = {10: _FakeProc(10, mb=100.0), 11: _FakeProc(11, mb=50.0),   # launcher + its helper
+             20: _FakeProc(20, mb=900.0), 21: _FakeProc(21, mb=80.0)}   # code + its shell
+    parent = {11: 10, 20: 10, 21: 20}
+    for pid, p in procs.items():
+        p.ppid = lambda pid=pid: parent.get(pid, 0)
+    monkeypatch.setattr(sensor, "_enum_windows", lambda: [(1, "Desktop", 10), (2, "Editor", 20)])
+    monkeypatch.setattr(sensor, "_foreground_pid", lambda: None)
+    monkeypatch.setattr(sensor, "_proc_name",
+                        lambda pid: {10: "explorer.exe", 11: "helper.exe", 20: "code.exe",
+                                     21: "powershell.exe"}.get(pid, ""))
+    monkeypatch.setattr(sensor, "_tree", lambda pid: {10: [procs[10], procs[11], procs[20], procs[21]],
+                                                      20: [procs[20], procs[21]]}[pid])
+    monkeypatch.setattr(sensor, "_is_elevated", lambda pid: False)
+    monkeypatch.setattr(sensor, "_has_network", lambda procs: False)
+    monkeypatch.setattr(sensor, "_audio_pids", lambda: set())
+    by_id = {s.app_id: s for s in sensor.RealSensor().snapshot()}
+    assert {p.pid for p in by_id["explorer.exe"].procs} == {10, 11}
+    assert by_id["explorer.exe"].working_set_mb == pytest.approx(150.0)
+    assert {p.pid for p in by_id["code.exe"].procs} == {20, 21}
+
+
+def test_garbage_negative_pid_is_nameless_not_fatal():
+    """A window that closes mid-call can report a negative PID; psutil raises ValueError."""
+    assert sensor._proc_name(-126960096) == ""
+    tracker = sensor.ForegroundTracker()
+    sensor_fg = sensor._foreground_pid
+    try:
+        sensor._foreground_pid = lambda: -5
+        tracker._poll_once()   # must not raise: the tracker thread would die silently
+    finally:
+        sensor._foreground_pid = sensor_fg
+
+
 def test_network_true_on_established():
     est = SimpleNamespace(status="ESTABLISHED")
     assert sensor._has_network([_FakeProc(1, conns=[est])])

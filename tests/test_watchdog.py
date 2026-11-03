@@ -242,3 +242,21 @@ def test_panic_key_dispatches_to_callback():
         assert fired.wait(5)
     finally:
         key.stop()
+
+
+def test_watchdog_process_thaws_when_parent_dies_with_fresh_beat(monkeypatch):
+    """A crash leaves a fresh heartbeat; the parent check still thaws."""
+    import sys
+
+    import psutil
+
+    from freezer import actuator
+
+    watchdog.beat()
+    act = _freeze_one(CountingActuator())
+    monkeypatch.setattr(actuator, "RealActuator", lambda: act)
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: False)
+    monkeypatch.setattr(sys, "argv", ["watchdog", "--parent", "4242"])
+    watchdog._main()
+    assert act.frozen() == []
+    assert act.thaw_all_calls == 1

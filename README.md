@@ -31,6 +31,14 @@ python -m eval.redteam --offline                         # harness plumbing, no 
 ```
 Set `MODEL_API_KEY` for voice (hold `Ctrl+Alt+Space` and speak) and for `--live-planner`.
 
+On real apps (it suspends them; never run it as administrator):
+```powershell
+$env:FF_HOME = "$env:TEMP\ff-live"; $env:FF_PAID_BALANCE = "1"   # after confirming a paid balance
+.\.venv\Scripts\python -m ui.app --live       # real sensor, policy, actuator; a watchdog thaws on crash
+.\.venv\Scripts\python -m demo.live_check     # scripted check on a sacrificial Notepad
+```
+Security claims and the tests behind them: [docs/threat-model.md](docs/threat-model.md).
+
 ## Repo map
 | Path | What |
 |---|---|

@@ -60,7 +60,7 @@ def live_app(tmp_path):
     marker = tmp_path / "ticks.txt"
     marker.write_text("", encoding="utf-8")
     proc = _subprocess.Popen(
-        [_sys.executable, "-c", _TICK_SRC, str(marker)],
+        [getattr(_sys, "_base_executable", _sys.executable), "-c", _TICK_SRC, str(marker)],
         stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL)
     try:
         assert _ticks_advancing(marker), "child never started ticking"

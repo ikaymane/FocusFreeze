@@ -9,3 +9,5 @@ websockets
 pyttsx3
 numpy
 imageio-ffmpeg
+pywin32
+hypothesis
