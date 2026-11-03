@@ -23,6 +23,11 @@ class Stats:
     restore_s: float = 0.0
 
 
+def cost_caption(usd: float) -> str:
+    """Plans cost fractions of a cent: say so in words, next to '$0.004'."""
+    return "AI cost · under 1 cent" if 0 < usd < 0.01 else "AI cost"
+
+
 class StatsCard(Card):
     def __init__(self, s: Stats):
         super().__init__(560)
@@ -32,7 +37,7 @@ class StatsCard(Card):
         grid = QHBoxLayout()
         self.counters: list[tuple] = []
         for value, fmt, name in ((s.freed_mb / 1024, "{:.1f} GB", "Freed"), (s.minutes, "{:.0f} min", "Focus"),
-                                 (float(s.apps), "{:.0f}", "apps frozen"), (s.usd, "${:.4f}", "AI cost")):
+                                 (float(s.apps), "{:.0f}", "apps frozen"), (s.usd, "${:.3f}", cost_caption(s.usd))):
             cell = QVBoxLayout()
             cell.setSpacing(0)
             number = label(fmt.format(0), 24, theme.ICE, bold=True)

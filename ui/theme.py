@@ -33,6 +33,7 @@ STYLE = f"""
 #row {{ background: transparent; border-bottom: 1px solid {LINE}; }}
 #plainrow {{ background: {RAISED}; border-radius: 6px; }}
 #blocked {{ background: rgba(239, 111, 94, 24); border-radius: 6px; }}
+#contrast {{ background: rgba(142, 216, 238, 22); border-radius: 6px; }}
 #banner {{ background: rgba(233, 192, 76, 34); border-radius: 6px; }}
 #ask {{ background: {RAISED}; border-radius: 6px; }}
 QScrollArea, #rows {{ background: transparent; border: none; }}

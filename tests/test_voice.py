@@ -121,3 +121,71 @@ def test_no_key_reports_error_without_opening_the_mic(monkeypatch):
     ptt = voice.PushToTalk(lambda *_: None, errors.append)
     ptt.press()
     assert errors and "MODEL_API_KEY" in errors[0] and not ptt.active
+
+
+def test_silent_server_after_endstream_times_out_as_didnt_catch_that(monkeypatch):
+    """CLOSE_TIMEOUT_S was unused: a server that goes quiet after endStream hung the
+    voice thread forever."""
+    import time
+
+    monkeypatch.setattr(voice, "CLOSE_TIMEOUT_S", 0.5)
+
+    async def server(ws):
+        await ws.recv()
+        await ws.send(json.dumps({"sessionId": "s1"}))
+        await ws.send(json.dumps({"type": "transcript", "transcript": "I'm", "final": False}))
+        async for msg in ws:   # reads audio and endStream, then never answers
+            pass
+
+    started = time.monotonic()
+    with pytest.raises(VoiceError, match="Didn't catch that"):
+        run_against(server, feed(b"\0" * 3840, None))
+    assert time.monotonic() - started < 5
+
+
+def test_server_closing_cleanly_returns_what_it_heard():
+    async def server(ws):
+        await ws.recv()
+        await ws.send(json.dumps({"sessionId": "s1"}))
+        await ws.send(json.dumps({"type": "transcript", "transcript": "freeze", "final": False,
+                                  "audioProcessedMs": 80}))
+        await ws.close(1000)
+
+    assert run_against(server, feed(b"\0" * 3840, None)) == ("freeze", 80)
+
+
+class _BrokenStream:
+    def stop(self):
+        raise OSError("device lost")
+
+    def close(self):
+        pass
+
+
+def test_release_always_ends_the_audio_even_if_the_mic_errors():
+    ptt = voice.PushToTalk(lambda *_: None, lambda _m: None, api_key="k")
+    frames = queue.Queue()
+    ptt._stream, ptt._frames = _BrokenStream(), frames
+    with pytest.raises(OSError):
+        ptt.release()
+    assert frames.get_nowait() is None and not ptt.active
+
+
+def test_hotkey_survives_press_and_release_errors():
+    """A raise in press() or release() used to kill the hotkey thread and leave the
+    gauge on 'listening'. Both are caught, reported, and release always runs."""
+    calls, errors = [], []
+
+    def press():
+        calls.append("press")
+        raise RuntimeError("mic exploded")
+
+    def release():
+        calls.append("release")
+        raise ValueError("also broken")
+
+    hk = voice.HoldHotkey(press, release, errors.append)
+    held = iter([True, False])
+    hk._hold(lambda: next(held))   # must not raise
+    assert calls == ["press", "release"]
+    assert errors == ["Voice failed (RuntimeError). Try again.", "Voice failed (ValueError). Try again."]

@@ -8,8 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QPushButton, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
+from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QVBoxLayout, QWidget)
 
 from freezer import sessions
 from freezer.agent import Proposal, block_reason
@@ -23,8 +24,8 @@ WARNING_MARK = "⚠"
 DISCONNECT_NOTE = f"{WARNING_MARK} may disconnect, reconnects on restore"
 ROW_DELAY_S = 0.028
 
-# What people call the apps the live sensor reports by exe. Display only: the planner,
-# policy and blocked lines all keep the exact app_id.
+# What people call the apps the live sensor reports by exe. Display only: the planner and
+# policy keep the exact app_id, and blocked lines carry it as their tooltip.
 FRIENDLY = {
     "chrome.exe": "Google Chrome", "msedge.exe": "Microsoft Edge", "firefox.exe": "Firefox",
     "code.exe": "Visual Studio Code", "windowsterminal.exe": "Windows Terminal",
@@ -35,6 +36,38 @@ FRIENDLY = {
     "steam.exe": "Steam", "steamwebhelper.exe": "Steam", "whatsapp.root.exe": "WhatsApp",
     "obs64.exe": "OBS Studio", "vlc.exe": "VLC",
 }
+
+
+def usd(amount: float) -> str:
+    """'$0.004': plan costs are fractions of a cent, so 4 decimals read as noise."""
+    return f"${amount:.3f}"
+
+
+def planned_line(proposal: Proposal, latency_s: float | None) -> str | None:
+    """'Planned by Muse Spark · 1.8 s · $0.002'. None in simple mode: its banner says why."""
+    if proposal.plan.model == "heuristic":
+        return None
+    parts = ["Planned by Muse Spark"]
+    if latency_s is not None:
+        parts.append(f"{latency_s:.1f} s")
+    parts.append(usd(proposal.plan.cost_usd))
+    return " · ".join(parts)
+
+
+CONTRAST_LINES = 3   # pinned lines, at most
+
+
+def shown_contrasts(proposal: Proposal) -> list:
+    """AI-vs-timer disagreements worth a line. Blocked apps are left out (the card already
+    says policy refused them), and "AI keeps what a timer would freeze" comes first: it
+    is the case a timer gets wrong and loses work over."""
+    blocked = {b.app_id for b in proposal.blocked}
+    return sorted((c for c in proposal.vs_timer if c.app_id not in blocked), key=lambda c: c.ai != "keep")
+
+
+def contrast_line(c, name: str) -> str:
+    """'Idle timer would freeze Adobe Acrobat · AI keeps it: Source paper for the thesis'"""
+    return f"Idle timer would {c.timer} {name} · AI {'keeps' if c.ai == 'keep' else 'freezes'} it: {c.reason}"
 
 
 def app_name(app_id: str, app=None) -> str:
@@ -99,7 +132,7 @@ class _AppRow(QFrame):
 class ConsentCard(Card):
     decided = Signal(object)  # CardResult, exactly once
 
-    def __init__(self, proposal: Proposal):
+    def __init__(self, proposal: Proposal, latency_s: float | None = None):
         super().__init__(WIDTH, HEIGHT)
         self.proposal = proposal
         self.apps = proposal.apps
@@ -172,8 +205,32 @@ class ConsentCard(Card):
             box.setContentsMargins(12, 7, 10, 7)
             box.setSpacing(1)
             for b in proposal.blocked:
-                box.addWidget(label(f"{b.app_id} — BLOCKED: {rule_words(b.rule)}", color=theme.HOT))
+                line = label(f"{self._name(b.app_id)} · Protected: {rule_words(b.rule)}", color=theme.HOT)
+                line.setToolTip(b.app_id)   # the exact id the policy refused
+                box.addWidget(line)
             self.body.addWidget(self.blocked_box)
+
+        # Pinned at the bottom, above the buttons: the apps where the AI overrules the
+        # idle timer are the proof it is not bolted on, so they read without scrolling.
+        self.contrast_box: QFrame | None = None
+        if contrasts := shown_contrasts(proposal):
+            self.contrast_box = QFrame(objectName="contrast")
+            box = QVBoxLayout(self.contrast_box)
+            box.setContentsMargins(12, 7, 10, 7)
+            box.setSpacing(2)
+            box.addWidget(label("Where the AI beat the idle timer", color=theme.ICE, bold=True))
+            for i, c in enumerate(contrasts[:CONTRAST_LINES]):
+                # The first line is the shot: it may wrap. The rest stay on one line, so
+                # three fit and the freeze list above keeps its rows.
+                full = contrast_line(c, self._name(c.app_id))
+                line = label(full, wrap=i == 0)
+                if i:   # measured in the stylesheet's font: the label has not been polished yet
+                    font = QFont(theme.FONT)
+                    font.setPixelSize(theme.TEXT)
+                    line.setText(QFontMetrics(font).elidedText(full, Qt.TextElideMode.ElideRight, WIDTH - 100))
+                line.setToolTip(full)
+                box.addWidget(line)
+            self.body.addWidget(self.contrast_box)
 
         self.ask = QFrame(objectName="ask")
         ask = QHBoxLayout(self.ask)
@@ -189,7 +246,14 @@ class ConsentCard(Card):
 
         foot = QHBoxLayout()
         self.total = label("", 19, bold=True)
-        foot.addWidget(self.total)
+        left = QVBoxLayout()
+        left.setSpacing(0)
+        left.addWidget(self.total)
+        self.planned: QLabel | None = None
+        if text := planned_line(proposal, latency_s):
+            self.planned = label(text, color=theme.MUTED)
+            left.addWidget(self.planned)
+        foot.addLayout(left)
         foot.addStretch(1)
         self.cancel_btn = QPushButton("Cancel", clicked=self.cancel)
         self.freeze_btn = QPushButton("Freeze", objectName="primary", clicked=self.accept)

@@ -4,17 +4,27 @@ A Windows agent that understands what you're working on, freezes the apps you do
 
 Built for the Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026). Problem statement 1: **Build for Your World**.
 
-**Meta models:** `muse-spark-1.3` (planning, tool calling, vision), `muse-voice-transcribe-1.0` (voice commands).
+**Meta models:** `muse-spark-1.3` (planning, tool calling), `muse-voice-transcribe-1.0` (voice commands).
 
-> Status (Oct 30): the AI layer (role C) runs end to end on mock parts. A, B and D
-> plug in on integration day (Nov 1). On a blind test set the planner got 88/88 decisions
-> right; a keyword table got 66% and an idle timer 57%. Red-team: 0 unsafe freezes in 270
-> attack runs, against a mock policy. About $0.002 per plan.
->
-> **Real window titles are blocked by default.** Contributor models never receive them, and
-> no model does until `FF_PAID_BALANCE=1` confirms a paid Meta balance. Until then the agent
-> runs in simple mode. `FF_SYNTHETIC_DATA=1` is for made-up data only: remove it from
-> `freezer/agent.py` `_main` when the real sensor is plugged in.
+**Video:** link added when uploaded.
+
+## Why
+On a 4 GB laptop, a normal day's apps fill the RAM and everything stutters. Closing apps
+loses your place. An idle timer freezes the wrong things: the PDF you haven't touched in 40
+minutes may be the spec you're working from. Focus Freeze asks Muse Spark which apps your
+task needs, shows a reason for each one, and freezes nothing until you say yes.
+
+- **Better than a timer:** 88/88 on a blind test set, vs 57% for an idle timer and 66% for a keyword table.
+- **Hard to abuse:** 0 unsafe freezes in 270 attack runs against the real policy. The model never
+  decides safety: a deny list runs after it, and every action goes into a tamper-evident log.
+- **Cheap:** about $0.002 per plan.
+
+**Real window titles are private by default.** Contributor models never receive them, and no
+model does until `FF_PAID_BALANCE=1` confirms a paid Meta balance. Until then the agent runs in
+simple mode (the idle rule).
+
+## Team
+Nassime Gharib (UI, voice, demo) · Aymane Idrissi Khamlichi (AI, sensor, policy) · Yassine Belaidi (systems: actuator, ledger, watchdog)
 
 ## Quick start
 ```
@@ -29,13 +39,16 @@ python -m eval.redteam --offline                         # harness plumbing, no 
 ```powershell
 .\.venv\Scripts\python -m ui.app   # demo desk on mock parts, offline, gauge marked Simulated
 ```
-Set `MODEL_API_KEY` for voice (hold `Ctrl+Alt+Space` and speak) and for `--live-planner`.
+Set `MODEL_API_KEY` for voice (push-to-talk: hold `Ctrl+Alt+Space` and speak) and for `--live-planner`.
 
-On real apps (it suspends them; never run it as administrator):
+## Run on real apps
+`--live` suspends real apps, so try it with apps you don't mind freezing. Never run it as administrator: it refuses to start.
 ```powershell
-$env:FF_HOME = "$env:TEMP\ff-live"; $env:FF_PAID_BALANCE = "1"   # after confirming a paid balance
+$env:MODEL_API_KEY = "..."
+$env:FF_PAID_BALANCE = "1"                    # needed for the AI: without it, the card uses the idle rule
+$env:FF_HOME = "$env:TEMP\ff-live"            # a scratch folder for sessions, ledger and audit log
 .\.venv\Scripts\python -m ui.app --live       # real sensor, policy, actuator; a watchdog thaws on crash
-.\.venv\Scripts\python -m demo.live_check     # scripted check on a sacrificial Notepad
+.\.venv\Scripts\python -m demo.live_check     # scripted check that freezes only a window it starts itself
 ```
 Security claims and the tests behind them: [docs/threat-model.md](docs/threat-model.md).
 
@@ -45,7 +58,7 @@ Security claims and the tests behind them: [docs/threat-model.md](docs/threat-mo
 | [ui/](ui/) | Tray app, RAM gauge, consent and guardian cards, session picker, stats card |
 | [freezer/voice.py](freezer/voice.py) | Push-to-talk, realtime transcription, command parsing |
 | [freezer/agent.py](freezer/agent.py) | Agent loop: sensor, planner, policy, consent card, actuator |
-| [demo/](demo/) | Video script and demo rig scripts |
+| [demo/](demo/) | Shot list for the video, demo rig scripts, `live_check.py` |
 | [plans/ram-freeze-agent.md](plans/ram-freeze-agent.md) | Full plan: feasibility test, evaluation, architecture, steps, budget, security |
 | [plans/roles/](plans/roles/README.md) | Step-by-step guide for each of the 4 team roles |
 | [freezer/contracts.py](freezer/contracts.py) | Shared types every role codes against |
@@ -55,3 +68,6 @@ Security claims and the tests behind them: [docs/threat-model.md](docs/threat-mo
 | [freezer/mocks.py](freezer/mocks.py) | Stand-ins for A's and B's parts until integration day |
 | [eval/](eval/) | Accuracy eval (`run.py`, `scenarios.json`, blind `holdout.json`: do not tune on it) and red-team (`redteam.py`, `attacks.json`) |
 | [tools/freeze_test.ps1](tools/freeze_test.ps1) | Feasibility prototype: 800 MB process → 0 MB in 90 ms |
+
+## License
+[MIT](LICENSE)

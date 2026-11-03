@@ -16,6 +16,7 @@ would lock the tray menu, and Panic thaw must always work.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -49,6 +50,45 @@ from ui.stats import Stats, StatsCard
 from ui.voicebar import VoiceBar
 
 GUARDIAN_POLL_MS = 5000
+
+log = logging.getLogger(__name__)
+
+
+class OffGui(QObject):
+    """Runs one blocking call at a time on a worker; the result comes back on the GUI
+    thread. A live snapshot takes 0.2-1.1 s, enough to stall the gauge and cards."""
+    _done = Signal(object, object)
+
+    def __init__(self, name: str = "ff-sensor"):
+        super().__init__()
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+        self._busy = False
+        self._done.connect(self._deliver)   # queued: the worker never touches widgets
+
+    def submit(self, fn: Callable[[], object], then: Callable[[object], None]) -> bool:
+        """False when the last call is still running: that poll is skipped, not queued."""
+        if self._busy:
+            return False
+        self._busy = True
+
+        def work() -> None:
+            try:
+                result = fn()
+            except Exception:  # noqa: BLE001 - a failed snapshot skips one poll
+                log.exception("background call failed")
+                result = None
+            self._done.emit(then, result)
+
+        self._pool.submit(work)
+        return True
+
+    def _deliver(self, then, result) -> None:
+        self._busy = False
+        if result is not None:
+            then(result)
+
+    def shutdown(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
 
 class Controller(QObject):
@@ -86,6 +126,8 @@ class Controller(QObject):
         self.card = None                  # ConsentCard or GuardianCard
         self.prompt: PromptCard | None = None
         self.stats = Stats()
+        self._plan_started: float | None = None
+        self._plan_answered: float | None = None
         self._show_card.connect(self._open_card)
         self._show_question.connect(self._open_question)
         self._voice_text.connect(self.handle_transcript)
@@ -102,6 +144,7 @@ class Controller(QObject):
             return
         self._close_prompt()
         self._abort.clear()
+        self._plan_started = self._plan_answered = None
         self.status.emit("Reading your open apps...")
         self.thinking.emit(True)
         self._job = self._worker.submit(self._guarded, self._run_focus, task, session)
@@ -126,6 +169,7 @@ class Controller(QObject):
             return
         self._ram_pct = event.ram_pct
         self._abort.clear()
+        self._plan_started = self._plan_answered = None
         self._job = self._worker.submit(self._guarded, self._run_pressure, event)
 
     def shutdown(self) -> None:
@@ -282,8 +326,19 @@ class Controller(QObject):
         self.status.emit("AI unavailable, using the simple idle rule.")
 
     def _on_progress(self, stage: str, attempt: int) -> None:
+        # Worker thread. Latency runs from the first request to the last response,
+        # retries included: what the user actually waited.
+        now = time.monotonic()
+        if stage == "request" and attempt <= 1:
+            self._plan_started, self._plan_answered = now, None
+        elif stage == "response":
+            self._plan_answered = now
         if stage == "request":
             self.status.emit("Asking Muse Spark..." if attempt <= 1 else f"Asking Muse Spark again ({attempt})...")
+
+    def plan_latency_s(self) -> float | None:
+        started, answered = self._plan_started, self._plan_answered
+        return answered - started if started is not None and answered is not None else None
 
     def _thaw_all(self) -> list[str]:
         restored = self.actuator.thaw_all()
@@ -306,7 +361,7 @@ class Controller(QObject):
                 answer.set_result(result)
 
         def open_consent() -> None:
-            card = ConsentCard(proposal)
+            card = ConsentCard(proposal, latency_s=self.plan_latency_s())
             self.card = card
             card.decided.connect(finish)
             card.present()
@@ -391,16 +446,53 @@ def connect_gauge(ctl: Controller, gauge: Gauge, overlay: MotionOverlay,
     ctl.thawed.connect(thawed)
 
 
+def own_pids(watchdog_pid: int | None = None) -> set[int]:
+    """This process, every ancestor and the watchdog with its children. getppid() alone
+    is the venv launcher, which left the shell and terminal running us freezable."""
+    import psutil
+    pids = {os.getpid(), os.getppid()}
+    try:
+        pids |= {p.pid for p in psutil.Process().parents()}
+    except psutil.Error:
+        log.warning("could not read our parent processes", exc_info=True)
+    if watchdog_pid:
+        pids.add(watchdog_pid)
+        try:
+            pids |= {c.pid for c in psutil.Process(watchdog_pid).children(recursive=True)}
+        except psutil.Error:
+            pass   # the watchdog is gone; its PID stays protected anyway
+    return pids
+
+
+class SessionPolicy:
+    """B's policy for whichever session is active. Its never-freeze and keep rules are
+    hard blocks, re-read on every call, so a session switch or a new rule applies at once."""
+
+    def __init__(self, self_pids: set[int] | None = None):
+        self.fixed_pids = self_pids        # None: own_pids() on every call
+        self.watchdog_pid: int | None = None
+        self.active: Callable[[], str | None] = lambda: None   # main() points this at the agent
+
+    @property
+    def self_pids(self) -> set[int]:
+        return self.fixed_pids if self.fixed_pids is not None else own_pids(self.watchdog_pid)
+
+    def __call__(self, freeze_ids, snapshots):
+        from freezer.policy import policy_for
+        name = self.active()
+        return policy_for(sessions.get(name) if name else None,
+                          self_pids=self.self_pids)(freeze_ids, snapshots)
+
+
 def make_parts(live_planner: bool, live: bool = False) -> dict:
     """The one place to swap mocks for the real parts."""
     if live:
         from freezer.actuator import RealActuator
-        from freezer.policy import policy_for
         from freezer.sensor import ForegroundTracker, RealSensor
         # Real titles: the default model, never the contributor one, which trains on
         # what it receives. The tracker supplies the idle times the guardian needs.
         return dict(sensor=RealSensor(ForegroundTracker().start()),
-                    policy=policy_for(None, self_pids={os.getpid(), os.getppid()}),
+                    policy=SessionPolicy(),
                     actuator=RealActuator())
     if not live_planner:
         mocks.install()
@@ -409,6 +501,13 @@ def make_parts(live_planner: bool, live: bool = False) -> dict:
                 # Synthetic desk, so the cheap contributor model is allowed. Real titles must
                 # use muse-spark-1.3: remove this line when the sensor is real.
                 model="muse-spark-1.3-contributor")
+
+
+def seed_demo_sessions(live: bool, live_planner: bool) -> None:
+    """Made-up sessions for the mock desk only. One of them auto-freezes, so on a real
+    PC it could freeze real apps with no card: never in --live."""
+    if not live and not live_planner:
+        mocks.seed_sessions()
 
 
 def main() -> int:
@@ -433,8 +532,7 @@ def main() -> int:
     speaker = Speaker()
     parts = make_parts(args.live_planner, args.live)
     actuator = parts["actuator"]
-    if not args.live_planner:
-        mocks.seed_sessions()   # synthetic sessions, also in --live
+    seed_demo_sessions(args.live, args.live_planner)
     actuator.thaw_all()  # contract: recover anything a crashed run left frozen
     if args.live:
         ram = read_ram
@@ -443,12 +541,15 @@ def main() -> int:
         heartbeat.start()
         app.aboutToQuit.connect(heartbeat.stop)
         # Its own process: it thaws when the heartbeat goes stale or this process exits.
-        subprocess.Popen([sys.executable, "-m", "freezer.watchdog", "--parent", str(os.getpid())],
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        watchdog = subprocess.Popen([sys.executable, "-m", "freezer.watchdog", "--parent", str(os.getpid())],
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        parts["policy"].watchdog_pid = watchdog.pid
     else:
         ram = lambda: mocks.ram_for(actuator)
         guardian = Guardian(ram_pct=lambda: ram().pct)
     ctl = Controller(**parts, speak=speaker.say, read_ram=ram, on_guardian_dismiss=guardian.dismissed)
+    if isinstance(parts["policy"], SessionPolicy):
+        parts["policy"].active = lambda: ctl.agent.session_name
 
     gauge = Gauge(ctl.read_ram, simulated=not args.live)
     overlay = MotionOverlay()
@@ -472,26 +573,33 @@ def main() -> int:
         keep[:] = [picker]
         picker.present()
 
+    sensing = OffGui()
+    app.aboutToQuit.connect(sensing.shutdown)
+
     def simulate_pressure() -> None:
         if not args.live:
             ctl.sensor.age(300)   # guardian only offers apps idle 5+ minutes
             ctl.on_pressure(mocks.PRESSURE)
             return
-        # Real apps, ranked the way the guardian ranks them; only RAM is pretended.
-        frozen = {e.app_id for e in actuator.frozen()}
-        snaps = sorted((s for s in ctl.sensor.snapshot() if s.app_id not in frozen),
-                       key=lambda s: s.last_focus_s * s.working_set_mb, reverse=True)
-        ctl.on_pressure(PressureEvent(max(ram().pct, 85.0), 30.0, [s.app_id for s in snaps]))
 
-    def poll_guardian() -> None:
-        snaps = ctl.sensor.snapshot()
+        def offer(snaps) -> None:
+            # Real apps, ranked the way the guardian ranks them; only RAM is pretended.
+            frozen = {e.app_id for e in actuator.frozen()}
+            ranked = sorted((s for s in snaps if s.app_id not in frozen),
+                            key=lambda s: s.last_focus_s * s.working_set_mb, reverse=True)
+            ctl.on_pressure(PressureEvent(max(ram().pct, 85.0), 30.0, [s.app_id for s in ranked]))
+
+        if not sensing.submit(ctl.sensor.snapshot, offer):
+            ctl.status.emit("Still reading your apps, try again in a moment.")
+
+    def check_guardian(snaps) -> None:
         frozen = {e.app_id for e in actuator.frozen()}
         if event := guardian.poll(snaps, frozen):
             if not args.live:
                 ctl.sensor.age(300)
             ctl.on_pressure(event)
 
-    poll = QTimer(interval=GUARDIAN_POLL_MS, timeout=poll_guardian)
+    poll = QTimer(interval=GUARDIAN_POLL_MS, timeout=lambda: sensing.submit(ctl.sensor.snapshot, check_guardian))
     poll.start()
 
     voicebar = VoiceBar(mocks.TRANSCRIPTS if not args.live_planner else None)
@@ -517,12 +625,18 @@ def main() -> int:
 
     def press() -> None:
         ctl.listening.emit(True)
-        if ptt.api_key:
-            ptt.press()
+        try:
+            if ptt.api_key:
+                ptt.press()
+        except Exception:
+            ctl.listening.emit(False)   # the hotkey thread logs and reports it
+            raise
 
     def release() -> None:
-        ptt.release()
-        ctl.listening.emit(False)
+        try:
+            ptt.release()
+        finally:
+            ctl.listening.emit(False)
         if not ptt.api_key:   # no key: the hotkey plays the demo's next line
             ctl.voice_heard(listen_once(scripted))
             scripted.append(scripted.pop(0))

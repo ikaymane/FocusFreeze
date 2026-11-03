@@ -96,10 +96,12 @@ def test_card_shows_decisions_blocked_reasons_and_total(ctl, qapp):
     assert card.width() == 640 and card.height() == 560
     assert card.heading.text() == mocks.LOGIN_TASK
     assert card.total.text() == "~2.6 GB to free"
-    assert "explorer.exe — BLOCKED: Protected process" in texts
-    assert "msedge.exe — BLOCKED: Injection attempt in title — blocked" in texts
-    assert "spotify.exe — BLOCKED: Playing audio" in texts
-    assert "code.exe — BLOCKED: Currently in use" in texts
+    assert "File Explorer · Protected: Protected process" in texts
+    assert "Microsoft Edge · Protected: Injection attempt in title — blocked" in texts
+    assert "Spotify · Protected: Playing audio" in texts
+    assert "Visual Studio Code · Protected: Currently in use" in texts
+    tips = {w.toolTip() for w in card.blocked_box.findChildren(QLabel)}
+    assert tips == {"explorer.exe", "msedge.exe", "spotify.exe", "code.exe"}   # exact ids kept
     assert any("a timer would freeze this" in t for t in texts)
     assert any("may disconnect" in t for t in texts)
     assert card.blocked_box.parent() is card.frame   # pinned, never scrolled away
@@ -138,9 +140,17 @@ def test_stats_card_lands_on_exact_values(qapp):
     card = StatsCard(Stats(2700, 4, 48, 0.0021, 2700, 3.2))
     card.present()
     wait_until(qapp, lambda: not any(i is card for i in fx.ticker()._items), timeout=4)
-    assert [c[0].text() for c in card.counters] == ["2.6 GB", "48 min", "4", "$0.0021"]
+    assert [c[0].text() for c in card.counters] == ["2.6 GB", "48 min", "4", "$0.002"]
     assert "Restored 2.6 GB in 3.2s" in card_texts(card)
+    assert "AI cost · under 1 cent" in card_texts(card)
     card.close()
+
+
+def test_stats_cost_caption_only_says_under_a_cent_when_true():
+    from ui.stats import cost_caption
+
+    assert cost_caption(0.004) == "AI cost · under 1 cent"
+    assert cost_caption(0.0123) == "AI cost" and cost_caption(0.0) == "AI cost"
 
 
 def test_blocked_app_can_never_be_frozen(ctl, qapp):
@@ -449,3 +459,151 @@ def test_live_exe_names_read_as_app_names_but_ids_stay_exact():
     assert app_name("discord.exe", live) == "Discord"
     assert app_name("steam.exe", mock) == "Steam (library)"
     assert app_name("unknown.exe", None) == "unknown.exe"
+
+
+def test_live_never_seeds_the_made_up_sessions():
+    """The mock desk's sessions include an auto_freeze one. On a real PC that would
+    freeze real apps with no card, so --live starts with no sessions at all."""
+    from ui.app import seed_demo_sessions
+
+    seed_demo_sessions(live=True, live_planner=False)
+    assert not any(s.auto_freeze for s in sessions.load())
+    assert sessions.load() == []
+    seed_demo_sessions(live=False, live_planner=False)   # the mock desk still gets them
+    assert any(s.auto_freeze for s in sessions.load())
+
+
+def test_snapshot_runs_off_the_gui_thread_and_lands_back_on_it(qapp):
+    """A live snapshot takes up to a second: on the GUI thread the gauge would stall."""
+    import threading
+
+    from ui.app import OffGui
+
+    gui = threading.current_thread()
+    ran_on, landed_on, got = [], [], []
+    gate = threading.Event()
+
+    def snapshot():
+        ran_on.append(threading.current_thread())
+        gate.wait(2)
+        return ["app.exe"]
+
+    off = OffGui()
+    try:
+        assert off.submit(snapshot, lambda r: (landed_on.append(threading.current_thread()), got.append(r)))
+        assert not off.submit(snapshot, got.append)   # still busy: that poll is skipped
+        gate.set()
+        wait_until(qapp, lambda: got)
+        assert ran_on[0] is not gui and landed_on == [gui] and got == [["app.exe"]]
+        assert off.submit(lambda: 1 / 0, got.append)  # a failing snapshot skips, then frees the slot
+        wait_until(qapp, lambda: off.submit(lambda: "ok", got.append))
+        wait_until(qapp, lambda: got[-1] == "ok")
+    finally:
+        off.shutdown()
+
+
+def test_live_policy_hard_blocks_the_active_sessions_rules():
+    """policy_for(None) ignored the session: its never-freeze and keep rules must be
+    hard blocks in --live, and follow the user when they switch session."""
+    from freezer.contracts import AppSnapshot, ProcRef
+    from ui.app import SessionPolicy
+
+    def snap(app_id, pid):
+        return AppSnapshot(app_id, app_id, [ProcRef(pid, 1.0)], [], 300.0, 3600.0, False, False, False, False)
+
+    desk = [snap("discord.exe", 9101), snap("acrord32.exe", 9102), snap("steam.exe", 9103),
+            snap("slack.exe", 9104), snap("notepad.exe", 9105)]
+    sessions.start("thesis", "writing my thesis")
+    sessions.add_rule("thesis", "discord.exe", "never_freeze")
+    sessions.add_rule("thesis", "acrord32.exe", "keep")
+    active = {"name": "thesis"}
+    policy = SessionPolicy(set())
+    policy.active = lambda: active["name"]
+
+    verdict = policy(["discord.exe", "acrord32.exe", "steam.exe"], desk)
+    assert verdict.allowed == ["steam.exe"]
+    assert {(b.app_id, b.rule) for b in verdict.blocked} == {("discord.exe", "user_never_freeze"),
+                                                            ("acrord32.exe", "user_keep")}
+    sessions.add_rule("thesis", "steam.exe", "never_freeze")   # a rule saved mid-session applies at once
+    assert policy(["steam.exe"], desk).allowed == []
+    active["name"] = None                                      # switched away: no session rules
+    assert policy(["discord.exe", "acrord32.exe"], desk).allowed == ["discord.exe", "acrord32.exe"]
+
+
+def test_own_pids_protect_every_ancestor_and_the_watchdog():
+    """Started as terminal -> shell -> venv launcher -> python, getppid() is only the
+    launcher. The shell and terminal running Focus Freeze must be 'self' too."""
+    import json
+    import subprocess
+    import sys
+
+    from ui.app import own_pids
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    inner = f"import json, sys; sys.path.insert(0, {root!r}); from ui.app import own_pids; print(json.dumps(sorted(own_pids())))"
+    middle = f"import subprocess, sys; sys.exit(subprocess.run([{sys.executable!r}, '-c', {inner!r}]).returncode)"
+    base = getattr(sys, "_base_executable", sys.executable)   # one extra level, like a shell
+    out = subprocess.run([base, "-c", middle], capture_output=True, text=True, timeout=60, check=True)
+    assert os.getpid() in json.loads(out.stdout.strip().splitlines()[-1])   # two or more levels up
+
+    dog = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        time.sleep(1.0)   # a venv launcher starts its real interpreter as a child
+        import psutil
+        kids = {c.pid for c in psutil.Process(dog.pid).children(recursive=True)}
+        assert {dog.pid} | kids <= own_pids(dog.pid)
+    finally:
+        import psutil
+        for c in psutil.Process(dog.pid).children(recursive=True):
+            c.kill()
+        dog.kill()
+
+
+def test_card_shows_ai_vs_timer_with_names_keep_first(ctl, qapp):
+    card = open_login_card(ctl, qapp)
+    assert card.contrast_box is not None and card.contrast_box.parent() is card.frame   # pinned
+    lines = [w.text() for w in card.contrast_box.findChildren(QLabel)]
+    assert lines[0] == "Where the AI beat the idle timer"
+    assert lines[1].startswith("Idle timer would freeze Adobe Acrobat Reader · AI keeps it: Reference PDF")
+    first = card.contrast_box.findChildren(QLabel)[1]
+    assert first.toolTip().endswith("a timer would freeze this")   # full reason, even when elided
+    assert not any("msedge" in t or "Microsoft Edge" in t for t in lines)   # blocked: no "AI freezes it"
+    assert len(lines) == 1 + 3   # at most 3, of the 4 disagreements
+    layout = card.body
+    assert layout.indexOf(card.contrast_box) > layout.indexOf(card.blocked_box)   # at the bottom
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_ai_vs_timer_hidden_in_simple_mode(ctl, qapp, monkeypatch):
+    monkeypatch.setattr(mocks, "fallback_reason", "the AI didn't answer in time")
+    card = open_login_card(ctl, qapp)
+    assert card.proposal.vs_timer == [] and card.contrast_box is None
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_card_footer_says_who_planned_it_how_fast_and_for_how_much(ctl, qapp):
+    import re
+
+    card = open_login_card(ctl, qapp)
+    assert card.planned is not None
+    assert re.fullmatch(r"Planned by Muse Spark · \d+\.\d s · \$0\.002", card.planned.text())
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_card_footer_hidden_in_simple_mode(ctl, qapp, monkeypatch):
+    monkeypatch.setattr(mocks, "fallback_reason", "the AI didn't answer in time")
+    card = open_login_card(ctl, qapp)
+    assert card.proposal.plan.model == "heuristic" and card.planned is None
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_plan_latency_runs_from_first_request_to_last_response(ctl):
+    ctl._on_progress("request", 1)
+    started = ctl._plan_started
+    ctl._on_progress("request", 2)          # a retry keeps the first start
+    ctl._on_progress("response", 2)
+    assert ctl._plan_started == started and ctl.plan_latency_s() >= 0
