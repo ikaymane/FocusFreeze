@@ -200,13 +200,14 @@ def _dedupe_pids(per_app: list) -> list:
 
 
 def _working_set_mb(procs: list[psutil.Process]) -> float:
+    """Resident set in MiB, matching the actuator and the contract."""
     total = 0.0
     for p in procs:
         try:
             total += p.memory_info().rss
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-    return total / 1e6
+    return total / 2**20
 
 
 def _is_elevated(pid: int) -> bool:
