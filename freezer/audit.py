@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 
 from freezer.contracts import AuditEntry
@@ -20,6 +21,9 @@ from freezer.cost import home
 GENESIS = "0" * 64
 _REQUIRED = {"ts", "actor", "action", "app_id", "reason", "prev_hash"}
 _ACTIONS = {"freeze", "thaw", "block", "propose", "rule_add"}
+# The UI, guardian and watchdog threads all log: read-hash-append must not interleave,
+# or two entries get the same prev_hash and verify() reports a break.
+_lock = threading.Lock()
 
 
 def path():
@@ -37,15 +41,16 @@ def _canonical(entry: AuditEntry) -> bytes:
 def log(actor: str, action: str, app_id: str, reason: str = "") -> AuditEntry:
     home().mkdir(parents=True, exist_ok=True)
     p = path()
-    prev = GENESIS
-    if p.exists():
-        raw = p.read_bytes().splitlines()
-        if raw:
-            prev = hashlib.sha256(raw[-1]).hexdigest()
-    entry = AuditEntry(ts=time.time(), actor=actor, action=action,
-                       app_id=app_id, reason=reason, prev_hash=prev)
-    with open(p, "ab") as f:
-        f.write(_canonical(entry) + b"\n")
+    with _lock:
+        prev = GENESIS
+        if p.exists():
+            raw = p.read_bytes().splitlines()
+            if raw:
+                prev = hashlib.sha256(raw[-1]).hexdigest()
+        entry = AuditEntry(ts=time.time(), actor=actor, action=action,
+                           app_id=app_id, reason=reason, prev_hash=prev)
+        with open(p, "ab") as f:
+            f.write(_canonical(entry) + b"\n")
     return entry
 
 
