@@ -17,6 +17,12 @@ SYSTEM = frozenset({
     "csrss.exe", "winlogon.exe", "wininit.exe", "services.exe", "lsass.exe",
     "smss.exe", "svchost.exe", "dwm.exe", "explorer.exe", "fontdrvhost.exe",
     "sihost.exe", "ctfmon.exe", "taskmgr.exe",
+    # Inbox shell hosts: text input (touch keyboard, emoji, IME), UWP
+    # hosting (freezing applicationframehost freezes every UWP app),
+    # shell experience, start menu, search, lock screen.
+    "textinputhost.exe", "applicationframehost.exe",
+    "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+    "searchhost.exe", "lockapp.exe",
 })
 
 # Antivirus / EDR. MsMpEng, NisSrv and MsSense are Defender; the rest is a
@@ -35,6 +41,11 @@ ACCESSIBILITY = frozenset({
 # Unlocking the vault matters more than the RAM it sits in.
 PASSWORD_MANAGERS = frozenset({
     "keepass.exe", "1password.exe", "bitwarden.exe",
+    # Real exe names, checked against vendor/process listings: KeePassXC,
+    # Dashlane, NordPass (+ background helper), Proton Pass, Enpass (+ helper).
+    "keepassxc.exe", "dashlane.exe", "nordpass.exe",
+    "nordpass-background-app.exe", "protonpass.exe", "enpass.exe",
+    "enpasshelper.exe",
 })
 
 # Single source of truth for the actuator's last-line backstop: every exe

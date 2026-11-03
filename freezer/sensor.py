@@ -11,7 +11,9 @@ that is another windowed app and everything under it (see :func:`_prune`). Only 
 alive at sampling time are emitted; a PID that dies mid-sample is skipped,
 never guessed (sampling instant documented for the U1 audit gap).
 
-Fail-closed choices: elevation unknown -> elevated (policy then blocks);
+Fail-closed choices: elevation of a living-but-unreadable process ->
+elevated (policy then blocks); a dead PID reads as not elevated (a process
+that exited mid-sample must not brand its app "Running as administrator");
 idle unknown -> 0.0 s (recently used: the guardian leaves it alone until
 the :class:`ForegroundTracker` has watched it idle); audio/network lookup
 failure -> False, documented (warning UX, not a safety gate).
@@ -51,6 +53,8 @@ def _enum_windows() -> list[tuple[int, str, int]]:
         try:
             if not win32gui.IsWindowVisible(hwnd):
                 return
+            if _is_cloaked(hwnd) or _is_tool_window(hwnd):
+                return
             title = (win32gui.GetWindowText(hwnd) or "").strip()
             if not title:
                 return
@@ -61,6 +65,36 @@ def _enum_windows() -> list[tuple[int, str, int]]:
 
     win32gui.EnumWindows(cb, None)
     return found
+
+
+_DWMWA_CLOAKED = 14
+_GWL_EXSTYLE = -20
+_WS_EX_TOOLWINDOW = 0x80
+
+
+def _is_cloaked(hwnd: int) -> bool:
+    """True when DWM reports the window cloaked (shell parts, no real UI)."""
+    try:
+        import ctypes
+        cloaked = ctypes.c_int()
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                hwnd, _DWMWA_CLOAKED, ctypes.byref(cloaked),
+                ctypes.sizeof(cloaked)) == 0:
+            return bool(cloaked.value)
+    except Exception:  # noqa: BLE001 - unknown cloaking, treat as visible
+        pass
+    return False
+
+
+def _is_tool_window(hwnd: int) -> bool:
+    """True for WS_EX_TOOLWINDOW windows (floating toolbars, trays)."""
+    try:
+        import win32gui
+        return bool(win32gui.GetWindowLong(hwnd, _GWL_EXSTYLE)
+                    & _WS_EX_TOOLWINDOW)
+    except Exception:  # noqa: BLE001 - unknown style, treat as app window
+        pass
+    return False
 
 
 def _foreground_pid() -> int | None:
@@ -131,18 +165,58 @@ def _prune(exe: str, procs: list, owners: set[str]) -> list:
     return [p for p in procs if not under_cut(p)]
 
 
+def _dedupe_pids(per_app: list) -> list:
+    """One PID in exactly one app.
+
+    :func:`_prune` cuts launcher/child overlaps by owner name, but a
+    mid-sample race (reparenting, PID reuse, disagreeing name lookups) can
+    still land one PID in two trees. The window owner's own app wins;
+    otherwise the most specific (smallest) tree keeps it; ties break by app
+    name so the outcome is deterministic. Without this, freezing a launcher
+    suspends what it opened, and one thaw leaves a PID suspended.
+    """
+    by_pid: dict[int, list[int]] = {}
+    for i, (_, _, procs) in enumerate(per_app):
+        for proc in procs:
+            by_pid.setdefault(proc.pid, []).append(i)
+    winner: dict[int, int] = {}
+    for pid, idxs in by_pid.items():
+        if len(idxs) == 1:
+            winner[pid] = idxs[0]
+            continue
+        owned = [i for i in idxs if pid in per_app[i][1]]
+        if owned:
+            best = sorted(owned, key=lambda i: per_app[i][0])[0]
+        else:
+            best = sorted(idxs,
+                          key=lambda i: (len(per_app[i][2]), per_app[i][0]))[0]
+        winner[pid] = best
+    out = []
+    for i, (exe, win_pids, procs) in enumerate(per_app):
+        kept = [proc for proc in procs if winner[proc.pid] == i]
+        if kept:
+            out.append((exe, win_pids, kept))
+    return out
+
+
 def _working_set_mb(procs: list[psutil.Process]) -> float:
+    """Resident set in MiB, matching the actuator and the contract."""
     total = 0.0
     for p in procs:
         try:
             total += p.memory_info().rss
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-    return total / 1e6
+    return total / 2**20
 
 
 def _is_elevated(pid: int) -> bool:
-    """Token-elevation check; True (blocked) when it cannot be answered."""
+    """Token-elevation check.
+
+    A PID that died mid-sample is not elevated (it will be skipped
+    downstream); only a living process we are denied to read stays
+    fail-closed, so a normal app never reads as "Running as administrator".
+    """
     try:
         import win32api
         import win32security
@@ -157,8 +231,11 @@ def _is_elevated(pid: int) -> bool:
                 win32api.CloseHandle(token)
         finally:
             win32api.CloseHandle(handle)
-    except Exception:  # noqa: BLE001 - fail closed, see module docstring
-        return True
+    except Exception:  # noqa: BLE001 - dead PID reads clean, see docstring
+        try:
+            return psutil.pid_exists(pid)
+        except Exception:  # noqa: BLE001 - liveness itself unknown: closed
+            return True
 
 
 def _has_network(procs: list[psutil.Process]) -> bool:
@@ -258,15 +335,18 @@ class RealSensor:
             g["pids"].append(pid)
             if len(g["titles"]) < _MAX_TITLES_PER_APP:
                 g["titles"].append(title)
-        snaps: list[AppSnapshot] = []
+        per_app: list[tuple[str, set[int], list]] = []
         for exe, g in groups.items():
             tree: dict[int, psutil.Process] = {}
             for pid in g["pids"]:
                 for proc in _tree(pid):
                     tree.setdefault(proc.pid, proc)
             procs = _prune(exe, list(tree.values()), set(groups))
-            if not procs:
-                continue
+            if procs:
+                per_app.append((exe, set(g["pids"]), procs))
+        snaps: list[AppSnapshot] = []
+        for exe, _win_pids, procs in _dedupe_pids(per_app):
+            g = groups[exe]
             refs = []
             for proc in procs:
                 try:

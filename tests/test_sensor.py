@@ -20,7 +20,7 @@ class _FakeProc:
         return 1.0
 
     def memory_info(self):
-        return SimpleNamespace(rss=self._mb * 1e6)
+        return SimpleNamespace(rss=self._mb * 2**20)
 
     def net_connections(self, kind=None):
         return self._conns
@@ -172,3 +172,120 @@ def test_live_notepad_snapshot():
                     _psutil.Process(p.pid).kill()
                 except Exception:
                     pass
+
+
+def _stub_win32(monkeypatch, open_process):
+    """Fake win32api/security/con modules for _is_elevated tests."""
+    import sys
+    import types
+    api = types.ModuleType("win32api")
+    api.OpenProcess = open_process
+    api.CloseHandle = lambda h: None
+    sec = types.ModuleType("win32security")
+    sec.OpenProcessToken = lambda h, acc: "tok"
+    sec.GetTokenInformation = lambda t, c: 1
+    sec.TOKEN_QUERY = 8
+    sec.TokenElevation = 20
+    con = types.ModuleType("win32con")
+    con.PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    monkeypatch.setitem(sys.modules, "win32api", api)
+    monkeypatch.setitem(sys.modules, "win32security", sec)
+    monkeypatch.setitem(sys.modules, "win32con", con)
+
+
+def _denied(*args):
+    raise OSError(5, "access denied")
+
+
+def _os_stubs(monkeypatch):
+    monkeypatch.setattr(sensor, "_is_elevated", lambda pid: False)
+    monkeypatch.setattr(sensor, "_has_network", lambda procs: False)
+    monkeypatch.setattr(sensor, "_audio_pids", lambda: set())
+
+
+def test_cloaked_and_tool_windows_skipped(monkeypatch):
+    """textinputhost-style shell windows never become apps."""
+    import win32gui
+    import win32process
+    monkeypatch.setattr(win32gui, "EnumWindows",
+                        lambda cb, _: [cb(h, None) for h in (1, 2, 3)])
+    monkeypatch.setattr(win32gui, "IsWindowVisible", lambda hwnd: True)
+    monkeypatch.setattr(win32gui, "GetWindowText",
+                        lambda hwnd: {1: "Shell", 2: "Tool", 3: "Real"}[hwnd])
+    monkeypatch.setattr(win32process, "GetWindowThreadProcessId",
+                        lambda hwnd: (0, {1: 11, 2: 12, 3: 13}[hwnd]))
+    monkeypatch.setattr(sensor, "_is_cloaked", lambda hwnd: hwnd == 1)
+    monkeypatch.setattr(sensor, "_is_tool_window", lambda hwnd: hwnd == 2)
+    monkeypatch.setattr(sensor, "_proc_name",
+                        lambda pid: {11: "textinputhost.exe", 12: "tool.exe",
+                                     13: "real.exe"}[pid])
+    monkeypatch.setattr(sensor, "_tree", lambda pid: [_FakeProc(pid)])
+    _os_stubs(monkeypatch)
+    assert [s.app_id for s in sensor.RealSensor().snapshot()] == ["real.exe"]
+
+
+def test_dead_pid_is_not_elevated(monkeypatch):
+    """A process that exited mid-sample must not read as admin."""
+    _stub_win32(monkeypatch, _denied)
+    monkeypatch.setattr(sensor.psutil, "pid_exists", lambda pid: False)
+    assert sensor._is_elevated(424242) is False
+
+
+def test_live_but_denied_pid_stays_elevated(monkeypatch):
+    """Fail-closed survives: a living process we cannot read stays blocked."""
+    _stub_win32(monkeypatch, _denied)
+    monkeypatch.setattr(sensor.psutil, "pid_exists", lambda pid: True)
+    assert sensor._is_elevated(4) is True
+
+
+def test_shared_pid_goes_to_most_specific_app(monkeypatch):
+    """helper pid 5 sits in both trees; the smaller tree keeps it."""
+    monkeypatch.setattr(sensor, "_enum_windows",
+                        lambda: [(1, "A", 1), (2, "B", 2)])
+    monkeypatch.setattr(sensor, "_foreground_pid", lambda: None)
+    monkeypatch.setattr(sensor, "_proc_name",
+                        lambda pid: {1: "a.exe", 2: "b.exe", 5: "helper.exe",
+                                     6: "helper.exe"}[pid])
+    monkeypatch.setattr(sensor, "_tree",
+                        lambda pid: {1: [_FakeProc(1), _FakeProc(5), _FakeProc(6)],
+                                     2: [_FakeProc(2), _FakeProc(5)]}[pid])
+    _os_stubs(monkeypatch)
+    by_id = {s.app_id: s for s in sensor.RealSensor().snapshot()}
+    a = {p.pid for p in by_id["a.exe"].procs}
+    b = {p.pid for p in by_id["b.exe"].procs}
+    assert a & b == set()
+    assert 5 in b and 5 not in a
+
+
+def test_shared_pid_stays_with_its_window_owner(monkeypatch):
+    """Mid-sample race: pid 5 owns B's window but lands in A's tree too.
+
+    _prune is bypassed to simulate the race (its live name lookups can
+    disagree with grouping-time names); the post-pass must still dedupe
+    with the window owner's app winning over the most specific tree.
+    """
+    monkeypatch.setattr(sensor, "_prune",
+                        lambda exe, procs, owners: procs)
+    monkeypatch.setattr(sensor, "_enum_windows",
+                        lambda: [(1, "A", 1), (2, "B", 5)])
+    monkeypatch.setattr(sensor, "_foreground_pid", lambda: None)
+    monkeypatch.setattr(sensor, "_proc_name",
+                        lambda pid: {1: "a.exe", 5: "b.exe", 7: "helper.exe",
+                                     8: "helper.exe"}[pid])
+    monkeypatch.setattr(sensor, "_tree",
+                        lambda pid: {1: [_FakeProc(1), _FakeProc(5)],
+                                     5: [_FakeProc(5), _FakeProc(7),
+                                         _FakeProc(8)]}[pid])
+    _os_stubs(monkeypatch)
+    by_id = {s.app_id: s for s in sensor.RealSensor().snapshot()}
+    a = {p.pid for p in by_id["a.exe"].procs}
+    b = {p.pid for p in by_id["b.exe"].procs}
+    assert a & b == set()
+    assert 5 in b and 5 not in a
+
+
+def test_working_set_uses_mib():
+    """5 MiB resident must read as 5.0, not 5.24 (decimal MB)."""
+    proc = _FakeProc(1)
+    proc.memory_info = lambda: SimpleNamespace(rss=5 * 2**20)
+    assert sensor._working_set_mb([proc]) == pytest.approx(5.0)

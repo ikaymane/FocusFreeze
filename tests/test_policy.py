@@ -260,3 +260,19 @@ def test_keep_refused_apps_use_no_cap_budget():
     assert len(v.allowed) == 4  # floor(0.8 * 6); the kept app uses no budget
     assert [(b.app_id, b.rule) for b in v.blocked] == [
         ("zotero.exe", "user_keep"), ("app4.exe", "too_many")]
+
+
+def test_shell_hosts_blocked_as_system():
+    """Inbox shell hosts: freezing one freezes the shell around it."""
+    for exe in ("textinputhost.exe", "applicationframehost.exe",
+                "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+                "searchhost.exe", "lockapp.exe"):
+        assert rule_of(exe) == "system_process", exe
+
+
+def test_password_managers_blocked():
+    """KeePassXC, Dashlane, NordPass, Proton Pass, Enpass: real exe names."""
+    for exe in ("keepassxc.exe", "dashlane.exe", "nordpass.exe",
+                "nordpass-background-app.exe", "protonpass.exe",
+                "enpass.exe", "enpasshelper.exe"):
+        assert rule_of(exe) == "password_manager", exe
