@@ -510,12 +510,42 @@ def seed_demo_sessions(live: bool, live_planner: bool) -> None:
         mocks.seed_sessions()
 
 
+_INSTANCE_MUTEX = None  # held for the process lifetime; Windows frees it on exit
+
+
+def claim_single_instance(name: str = "Local\\FocusFreeze.App") -> bool:
+    """False if another Focus Freeze already runs.
+
+    A second copy would lose the voice hotkey, and its startup thaw_all() would
+    thaw the apps the first copy froze.
+    """
+    global _INSTANCE_MUTEX
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    k32.CreateMutexW.restype = wintypes.HANDLE
+    handle = k32.CreateMutexW(None, False, name)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        k32.CloseHandle(handle)
+        return False
+    _INSTANCE_MUTEX = handle
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Focus Freeze tray app, on mock parts.")
     ap.add_argument("--live-planner", action="store_true", help="call Muse Spark instead of the mock plan")
     ap.add_argument("--live", action="store_true",
                     help="real sensor, policy and actuator (implies --live-planner)")
     args = ap.parse_args()
+
+    if not claim_single_instance():
+        print("Focus Freeze is already running. Quit it from the tray first.", file=sys.stderr)
+        return 3
 
     if args.live:
         from freezer.actuator import AdminRefusal, ensure_not_elevated
