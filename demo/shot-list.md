@@ -8,7 +8,7 @@ Numbers in [brackets] are read off the rig during the take. Never narrate one we
 |---|---|---|---|
 | 1 | 0:00–0:12 | Desktop with the demo apps open. Task Manager → Memory at [~90]%. Gauge top right, amber/red, no "Simulated" label. | VO: "This is a 4 GB laptop with a normal day's apps open. Memory is at [90] percent, and closing things means losing my place." |
 | 2 | 0:12–0:20 | Hold Ctrl+Alt+Space. Voice bar shows the live transcript. | *Spoken:* "I'm writing my thesis on urban heat islands." |
-| 3 | 0:20–0:45 | Consent card. Slow pan: Discord, Steam, Teams, Slack to freeze, each with its reason. Then hold on the **"AI vs a 20-minute idle timer"** box: "Idle timer would freeze: Adobe Acrobat Reader · AI keeps it: ...". | VO: "Muse Spark read my task and every open window, and gave a reason for each app. A 20-minute idle timer would have frozen my reference PDF. The AI keeps it, because I need it. Nothing happens until I say yes." *Spoken:* "Freeze." |
+| 3 | 0:20–0:45 | Consent card. Slow pan: Discord, Steam, Teams, Slack to freeze, each with its reason. Then hold on the **"Where the AI beat the idle timer"** box above the buttons: "Idle timer would freeze Adobe Acrobat Reader · AI keeps it: ...". | VO: "Muse Spark read my task and every open window, and gave a reason for each app. A 20-minute idle timer would have frozen my reference PDF. The AI keeps it, because I need it. Nothing happens until I say yes." *Spoken:* "Freeze." |
 | 4 | 0:45–1:00 | The freeze effect, then the gauge number rolls from [90] to [55]%. The "freed this session" counter climbs. | VO: "[1.4] gigabytes back in [one] second." |
 | 5 | 1:00–1:12 | Task Manager → Details tab, Status column: discord.exe, steam.exe and others show **Suspended**. | VO: "They're not closed. They're frozen: zero CPU, and their memory is free to reclaim." |
 | 6 | 1:12–1:27 | Terminal: `python -m freezer.cli verify-log` → `audit log ok: [N] entries`. | VO: "The model never decides safety. A deny list runs after it, and every action goes into a tamper-evident log." |
@@ -30,7 +30,7 @@ Numbers in [brackets] are read off the rig during the take. Never narrate one we
 
 ## Known limits (do not claim otherwise on camera)
 - Windows Defender has no window, so it is never a candidate and never shows on the card: no Defender shot. Only Explorer can appear as "BLOCKED", and only if the planner proposes it.
-- The AI-vs-timer box only shows what this take's plan really disagreed on. If the PDF is not in it, do not narrate the PDF line: retake, or say what the box shows.
+- The "Where the AI beat the idle timer" box only shows what this take's plan really disagreed on. If the PDF is not in it, do not narrate the PDF line: retake, or say what the box shows.
 - Restoring an app brings its window to the front. Film the guardian scene before "I'm done".
 - Voice is push-to-talk: call it "one hotkey".
 

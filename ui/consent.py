@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
                                QVBoxLayout, QWidget)
 
@@ -54,7 +54,7 @@ def planned_line(proposal: Proposal, latency_s: float | None) -> str | None:
     return " · ".join(parts)
 
 
-CONTRAST_LINES = 2   # pinned lines: more would push the freeze list off a 560 px card
+CONTRAST_LINES = 3   # pinned lines, at most
 
 
 def shown_contrasts(proposal: Proposal) -> list:
@@ -66,8 +66,8 @@ def shown_contrasts(proposal: Proposal) -> list:
 
 
 def contrast_line(c, name: str) -> str:
-    """'Idle timer would freeze: Reference PDF  ·  AI keeps it: OAuth spec for this bug'"""
-    return f"Idle timer would {c.timer}: {name}  ·  AI {'keeps' if c.ai == 'keep' else 'freezes'} it: {c.reason}"
+    """'Idle timer would freeze Adobe Acrobat · AI keeps it: Source paper for the thesis'"""
+    return f"Idle timer would {c.timer} {name} · AI {'keeps' if c.ai == 'keep' else 'freezes'} it: {c.reason}"
 
 
 def app_name(app_id: str, app=None) -> str:
@@ -198,21 +198,6 @@ class ConsentCard(Card):
         self.scroll.setWidget(holder)
         self.body.addWidget(self.scroll, 1)
 
-        # Pinned too: the apps where the AI overrules the idle timer are the proof it
-        # is not bolted on, so they must read on camera without scrolling.
-        self.contrast_box: QFrame | None = None
-        if contrasts := shown_contrasts(proposal):
-            self.contrast_box = QFrame(objectName="contrast")
-            box = QVBoxLayout(self.contrast_box)
-            box.setContentsMargins(12, 7, 10, 7)
-            box.setSpacing(2)
-            box.addWidget(label("AI vs a 20-minute idle timer", color=theme.ICE, bold=True))
-            for c in contrasts[:CONTRAST_LINES]:
-                box.addWidget(label(contrast_line(c, self._name(c.app_id)), wrap=True))
-            if more := len(contrasts) - CONTRAST_LINES:
-                box.addWidget(label(f"+{more} more where they disagree", color=theme.MUTED))
-            self.body.addWidget(self.contrast_box)
-
         # Pinned, not in the scroll area: safety refusals must never be below the fold.
         if proposal.blocked:
             self.blocked_box = QFrame(objectName="blocked")
@@ -222,6 +207,28 @@ class ConsentCard(Card):
             for b in proposal.blocked:
                 box.addWidget(label(f"{b.app_id} — BLOCKED: {rule_words(b.rule)}", color=theme.HOT))
             self.body.addWidget(self.blocked_box)
+
+        # Pinned at the bottom, above the buttons: the apps where the AI overrules the
+        # idle timer are the proof it is not bolted on, so they read without scrolling.
+        self.contrast_box: QFrame | None = None
+        if contrasts := shown_contrasts(proposal):
+            self.contrast_box = QFrame(objectName="contrast")
+            box = QVBoxLayout(self.contrast_box)
+            box.setContentsMargins(12, 7, 10, 7)
+            box.setSpacing(2)
+            box.addWidget(label("Where the AI beat the idle timer", color=theme.ICE, bold=True))
+            for i, c in enumerate(contrasts[:CONTRAST_LINES]):
+                # The first line is the shot: it may wrap. The rest stay on one line, so
+                # three fit and the freeze list above keeps its rows.
+                full = contrast_line(c, self._name(c.app_id))
+                line = label(full, wrap=i == 0)
+                if i:   # measured in the stylesheet's font: the label has not been polished yet
+                    font = QFont(theme.FONT)
+                    font.setPixelSize(theme.TEXT)
+                    line.setText(QFontMetrics(font).elidedText(full, Qt.TextElideMode.ElideRight, WIDTH - 100))
+                line.setToolTip(full)
+                box.addWidget(line)
+            self.body.addWidget(self.contrast_box)
 
         self.ask = QFrame(objectName="ask")
         ask = QHBoxLayout(self.ask)
