@@ -11,20 +11,27 @@ from collections import deque
 from typing import Callable, NamedTuple
 
 import psutil
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ui import fx, theme
 
-W, H = 360, 216
+W, H = 300, 164
+PAD = 14
 COLS, ROWS = 40, 3
-CELL = 6.0
+CELL = 5.0
 GAP = 1.2
-GRID_X = 16
-GRID_Y = 110
+GRID_X = PAD
+GRID_Y = 86
 STAGGER_S = 0.016       # the wave, per column
-DIGIT_H = 62
+DIGIT_PX = 42
+DIGIT_H = 48
+DIGIT_TOP = 8
+FREED_Y = 58
+STATUS_Y = GRID_Y + ROWS * (CELL + GAP) + 7
+ENTER_S = 0.32          # fade-in when the gauge first appears
+STATUS_FADE_S = 0.22
 
 
 class Ram(NamedTuple):
@@ -48,7 +55,13 @@ class _Cell:
         self.wait = 0.0
 
 
+CLICK_SLOP = 4   # px: a press that moves less than this is a click, not a drag
+
+
 class Gauge(QWidget):
+    clicked = Signal()   # not after a drag
+    moved = Signal()     # the voice drawer follows it
+
     def __init__(self, read: Callable[[], Ram] = read_ram, simulated: bool = False):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                          | Qt.WindowType.Tool)
@@ -65,6 +78,14 @@ class Gauge(QWidget):
         self._time = 0.0
         self._level_clock = 0.0
         self._hold = 0.0         # waits for the chip to land before reacting
+        # Eased 0..1 values, so every state change blends instead of snapping.
+        self._enter_t = 0.0      # first appearance
+        self._listen_t = 0.0     # border glow, and the wave in place of the status line
+        self._hover_t = 0.0
+        self._hovered = False
+        self._status_prev = ""
+        self._status_t = 1.0     # crossfade from the previous status line
+        self._press_at = QPoint()
 
         self.ram = read()
         self._shown_pct = round(self.ram.pct, 1)
@@ -80,6 +101,12 @@ class Gauge(QWidget):
         if screen := QGuiApplication.primaryScreen():
             area = screen.availableGeometry()
             self.move(area.right() - W - 16, area.top() + 16)
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        if self._enter_t == 0.0:
+            self.setWindowOpacity(0.0)
+            self._wake()
 
     def _retarget(self) -> None:
         n = len(self._cells)
@@ -111,8 +138,10 @@ class Gauge(QWidget):
         self._wake()
 
     def set_status(self, text: str) -> None:
-        self.status = text
-        self.update()
+        if text == self.status:
+            return
+        self._status_prev, self.status, self._status_t = self.status, text, 0.0
+        self._wake()
 
     def set_listening(self, on: bool) -> None:
         self.listening = on
@@ -145,7 +174,7 @@ class Gauge(QWidget):
             self.update()
             return True
 
-        moving = self.listening or self.thinking
+        moving = self._ease(dt) or self.listening or self.thinking
         for c in self._cells:
             if c.wait > 0:
                 c.wait -= dt
@@ -176,73 +205,100 @@ class Gauge(QWidget):
         self.update()
         return moving
 
+    def _ease(self, dt: float) -> bool:
+        """Advance the small UI blends. True while any is still moving."""
+        if self._enter_t < 1.0:
+            self._enter_t = min(1.0, self._enter_t + dt / ENTER_S)
+            self.setWindowOpacity(fx.ease_out(self._enter_t))
+        self._listen_t = fx.approach(self._listen_t, 1.0 if self.listening else 0.0, dt, 10)
+        self._hover_t = fx.approach(self._hover_t, 1.0 if self._hovered else 0.0, dt, 12)
+        self._status_t = min(1.0, self._status_t + dt / STATUS_FADE_S)
+        settled = (self._enter_t >= 1.0 and self._status_t >= 1.0
+                   and abs(self._listen_t - round(self._listen_t)) < 0.005
+                   and abs(self._hover_t - round(self._hover_t)) < 0.005)
+        if settled:
+            self._listen_t, self._hover_t = float(round(self._listen_t)), float(round(self._hover_t))
+        return not settled
+
     # ---- painting ----------------------------------------------------------
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(QPen(QColor(theme.ICE if self.listening else theme.LINE), 1))
+        # Border: hover lifts it a little; listening turns it ice and lets it breathe.
+        border = fx.mix(QColor(theme.LINE), QColor(theme.MUTED), self._hover_t * 0.35)
+        breathe = 0.75 + 0.25 * math.sin(self._time * 4.0) if self.listening else 1.0
+        border = fx.mix(border, QColor(theme.ICE), self._listen_t * breathe)
+        p.setPen(QPen(border, 1))
         p.setBrush(QColor(theme.PANEL))
         p.drawRoundedRect(QRectF(0.5, 0.5, W - 1, H - 1), 10, 10)
+        p.translate(0, round((1 - fx.ease_out(self._enter_t)) * 6))   # settles as it fades in
 
         self._paint_number(p)
         moving = abs(self._shown_pct - round(self.ram.pct, 1)) > 0.02
         scale = self.ram.used_gb / max(self.ram.pct, 0.1)          # keeps the source's own GB units
         used = self._shown_pct * scale if moving else self.ram.used_gb   # follows the digits
-        p.setPen(QColor(theme.INK))
-        p.setFont(self._font(theme.TEXT))
-        p.drawText(QRectF(180, 18, W - 196, 24), Qt.AlignmentFlag.AlignRight,
+        p.setPen(QColor(theme.MUTED))
+        p.setFont(self._font(theme.SMALL))
+        p.drawText(QRectF(W / 2, 14, W / 2 - PAD, 20), Qt.AlignmentFlag.AlignRight,
                    f"{used:.2f}/{self.ram.total_gb:.2f} GB")
         p.setPen(QColor(theme.ICE if self._shown_frozen > 0.005 else theme.MUTED))
-        p.setFont(self._font(theme.TEXT, QFont.Weight.DemiBold))
-        p.drawText(QRectF(16, 78, W - 32, 26), Qt.AlignmentFlag.AlignLeft,
+        p.setFont(self._font(theme.SMALL, QFont.Weight.DemiBold))
+        p.drawText(QRectF(PAD, FREED_Y, W - 2 * PAD, 22), Qt.AlignmentFlag.AlignLeft,
                    f"freed this session: {self._shown_frozen * 1024:,.0f} MB")
 
         self._paint_cells(p)
 
-        y = GRID_Y + ROWS * (CELL + GAP) + 8
-        if self.listening:
-            self._paint_wave(p, y)
-            return
-        p.setPen(QColor(theme.MUTED))
-        p.setFont(self._font(theme.TEXT))
-        text = self.status or "Hold Ctrl+Alt+Space and say what you're working on"
-        if self.simulated:
-            text = f"Simulated. {text}"
-        rect = QRectF(16, y, W - 32, H - y - 6)
-        flags = Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignTop
-        p.drawText(rect, flags, text)
+        # The status line and the voice wave share one slot and crossfade.
+        if self._listen_t > 0.0:
+            p.setOpacity(self._listen_t)
+            self._paint_wave(p, STATUS_Y)
+        if self._listen_t < 1.0:
+            rect = QRectF(PAD, STATUS_Y, W - 2 * PAD, H - STATUS_Y - 4)
+            flags = Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignTop
+            p.setFont(self._font(theme.SMALL))
+            p.setPen(QColor(theme.MUTED))
+            if self._status_t < 1.0:
+                p.setOpacity((1 - self._listen_t) * (1 - self._status_t))
+                p.drawText(rect, flags, self._status_text(self._status_prev))
+            p.setOpacity((1 - self._listen_t) * self._status_t)
+            p.drawText(rect, flags, self._status_text(self.status))
+        p.setOpacity(1.0)
+
+    def _status_text(self, status: str) -> str:
+        text = status or "Hold Ctrl+Alt+Space and say what you're working on"
+        return f"Simulated. {text}" if self.simulated else text
 
     def _paint_number(self, p: QPainter) -> None:
         """Odometer digits, to one decimal: the tenths roll continuously, and each higher
         digit turns over only while the one below it passes from 9 to 0."""
-        p.setFont(self._font(54, QFont.Weight.Light))
+        p.setFont(self._font(DIGIT_PX, QFont.Weight.Light))
         metrics = p.fontMetrics()
         digit_w = metrics.horizontalAdvance("0")
         tenths = min(self._shown_pct, 100.0) * 10
         if abs(tenths - round(tenths)) < 1e-6:
             tenths = float(round(tenths))
         p.save()
-        p.setClipRect(QRectF(12, 10, 170, DIGIT_H + 6))
+        p.setClipRect(QRectF(PAD - 4, DIGIT_TOP, 140, DIGIT_H + 6))
         p.setPen(self._color)
-        x = 16.0
+        x = float(PAD)
         places = (1000, 100, 10, 1) if tenths >= 999.5 else (100, 10, 1)
         for place in places:
             whole = int(tenths // place)
             below = tenths % place
             frac = below if place == 1 else max(below - (place - 1), 0.0)
             if place == 1:
-                p.drawText(QRectF(x, 10, digit_w * 0.5, DIGIT_H), Qt.AlignmentFlag.AlignCenter, ".")
+                p.drawText(QRectF(x, DIGIT_TOP, digit_w * 0.5, DIGIT_H), Qt.AlignmentFlag.AlignCenter, ".")
                 x += digit_w * 0.5
             for digit, shift in ((whole % 10, 0.0), ((whole + 1) % 10, 1.0)):
-                top = 10 + DIGIT_H * (shift - frac)
-                if -DIGIT_H < top - 10 < DIGIT_H:
+                top = DIGIT_TOP + DIGIT_H * (shift - frac)
+                if -DIGIT_H < top - DIGIT_TOP < DIGIT_H:
                     p.drawText(QRectF(x, top, digit_w, DIGIT_H), Qt.AlignmentFlag.AlignCenter, str(digit))
             x += digit_w
         p.restore()
         p.setPen(QColor(theme.MUTED))
-        p.setFont(self._font(22, QFont.Weight.Light))
-        p.drawText(QRectF(x + 3, 16, 30, DIGIT_H - 10), Qt.AlignmentFlag.AlignVCenter, "%")
+        p.setFont(self._font(18, QFont.Weight.Light))
+        p.drawText(QRectF(x + 2, DIGIT_TOP + 6, 26, DIGIT_H - 10), Qt.AlignmentFlag.AlignVCenter, "%")
 
     def _paint_cells(self, p: QPainter) -> None:
         free, frozen = QColor(theme.FREE), QColor(theme.ICE)
@@ -258,13 +314,13 @@ class Gauge(QWidget):
             p.drawRoundedRect(QRectF(GRID_X + c.col * pitch, GRID_Y + c.row * (CELL + GAP), pitch - GAP, CELL), 1.2, 1.2)
 
     def _paint_wave(self, p: QPainter, y: float) -> None:
-        mid = y + 10
-        step = (W - 32) / len(self.levels)
+        mid = y + 12
+        step = (W - 2 * PAD) / len(self.levels)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(theme.ICE))
         for i, level in enumerate(self.levels):
-            h = max(1.5, level * 18)
-            p.drawRoundedRect(QRectF(16 + i * step, mid - h / 2, max(step - 2.4, 1.2), h), 1, 1)
+            h = max(1.5, level * 20)
+            p.drawRoundedRect(QRectF(PAD + i * step, mid - h / 2, max(step - 2.4, 1.2), h), 1, 1)
 
     @staticmethod
     def _font(px: int, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
@@ -275,10 +331,26 @@ class Gauge(QWidget):
 
     def mousePressEvent(self, e) -> None:
         self._drag = e.globalPosition().toPoint() - self.pos()
+        self._press_at = e.globalPosition().toPoint()
 
     def mouseMoveEvent(self, e) -> None:
         if self._drag is not None:
             self.move(e.globalPosition().toPoint() - self._drag)
 
-    def mouseReleaseEvent(self, _e) -> None:
+    def mouseReleaseEvent(self, e) -> None:
+        dragged = (e.globalPosition().toPoint() - self._press_at).manhattanLength()
         self._drag = None
+        if dragged < CLICK_SLOP:
+            self.clicked.emit()
+
+    def enterEvent(self, e) -> None:
+        self._hovered = True
+        self._wake()
+
+    def leaveEvent(self, e) -> None:
+        self._hovered = False
+        self._wake()
+
+    def moveEvent(self, e) -> None:
+        super().moveEvent(e)
+        self.moved.emit()

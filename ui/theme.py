@@ -25,6 +25,8 @@ FONT = "Segoe UI"      # ships with Windows, so this reads as part of the OS
 # Readable at 1080p on video: 13 pt is 17 px at 96 dpi, and nothing goes below it.
 TEXT = 17
 TITLE = 24
+# The always-on gauge and its voice drawer stay compact so they never crowd your work.
+SMALL = 15
 _CHECK = (Path(__file__).parent / "assets" / "check.svg").as_posix()
 
 STYLE = f"""
