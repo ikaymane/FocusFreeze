@@ -610,12 +610,18 @@ def main() -> int:
 
     def press() -> None:
         ctl.listening.emit(True)
-        if ptt.api_key:
-            ptt.press()
+        try:
+            if ptt.api_key:
+                ptt.press()
+        except Exception:
+            ctl.listening.emit(False)   # the hotkey thread logs and reports it
+            raise
 
     def release() -> None:
-        ptt.release()
-        ctl.listening.emit(False)
+        try:
+            ptt.release()
+        finally:
+            ctl.listening.emit(False)
         if not ptt.api_key:   # no key: the hotkey plays the demo's next line
             ctl.voice_heard(listen_once(scripted))
             scripted.append(scripted.pop(0))

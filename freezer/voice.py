@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import queue
 import re
@@ -20,14 +21,17 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Literal
 
+log = logging.getLogger(__name__)
+
 WS_URL = os.environ.get("FF_ASR_URL", "wss://api.meta.ai/v1/asr/realtime")
 MODEL = "muse-voice-transcribe-1.0"
 SAMPLE_RATE = 24_000
 FRAME_SAMPLES = 1920         # 80 ms, 3840 bytes of 16-bit mono PCM
 KEYWORDS = ["focus", "freeze", "session", "I'm done", "bring them back"]
 MAX_HOLD_S = 60              # a stuck key must not stream (and bill) forever
-CLOSE_TIMEOUT_S = 8
+CLOSE_TIMEOUT_S = 8         # after endStream: longer than this and the server has gone silent
 USD_PER_MINUTE = 0.003
+NOT_CAUGHT = "Didn't catch that. Hold Ctrl+Alt+Space and try again."
 
 
 # ---- Commands --------------------------------------------------------------
@@ -86,7 +90,7 @@ async def transcribe(frames: "queue.Queue[bytes | None]", api_key: str,
 
     loop = asyncio.get_running_loop()
     try:
-        async with websockets.connect(WS_URL, max_size=2**20, open_timeout=10) as ws:
+        async with websockets.connect(WS_URL, max_size=2**20, open_timeout=10, close_timeout=2) as ws:
             # This endpoint ignores the Authorization header: the key goes in the first frame.
             await ws.send(json.dumps({
                 "authorization": {"accessToken": f"Bearer {api_key}"},
@@ -99,16 +103,33 @@ async def transcribe(frames: "queue.Queue[bytes | None]", api_key: str,
             if ack.get("type") == "error" or "sessionId" not in ack:
                 raise VoiceError(ack.get("message") or "The voice service refused the session.")
 
+            ended = asyncio.Event()
+
             async def send_audio() -> None:
                 while (frame := await loop.run_in_executor(None, frames.get)) is not None:
                     await ws.send(frame)
                 # Half-close: keep reading, closing now would drop the final transcript.
                 await ws.send(json.dumps({"type": "endStream"}))
+                ended.set()
 
             sender = asyncio.create_task(send_audio())
             text, audio_ms = "", 0
+            deadline = None
             try:
-                async for raw in ws:
+                while True:
+                    # Until endStream the user may still be talking; after it the server
+                    # has CLOSE_TIMEOUT_S to send the final transcript, or we give up.
+                    if ended.is_set() and deadline is None:
+                        deadline = loop.time() + CLOSE_TIMEOUT_S
+                    wait = 0.25 if deadline is None else deadline - loop.time()
+                    if wait <= 0:
+                        raise VoiceError(NOT_CAUGHT)
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), wait)
+                    except asyncio.TimeoutError:
+                        continue
+                    except websockets.ConnectionClosedOK:
+                        break
                     if isinstance(raw, bytes):
                         continue
                     event = json.loads(raw)
@@ -186,9 +207,11 @@ class PushToTalk:
             stream, frames = self._stream, self._frames
             self._stream = self._frames = None
         if stream is not None:
-            stream.stop()
-            stream.close()
-            frames.put(None)
+            try:
+                stream.stop()
+                stream.close()
+            finally:
+                frames.put(None)   # always: without it the transcription waits for audio forever
 
     def _expire(self, frames: queue.Queue) -> None:
         if self._frames is frames:
@@ -200,6 +223,10 @@ class PushToTalk:
         except VoiceError as e:
             self.release()
             self.on_error(str(e))
+        except Exception:  # noqa: BLE001 - a voice bug must not end in silence
+            log.exception("transcription failed")
+            self.release()
+            self.on_error(NOT_CAUGHT)
         else:
             self.release()  # the server can finish first; the mic must not outlive the stream
             self.on_transcript(text, audio_ms / 60_000 * USD_PER_MINUTE)
@@ -277,14 +304,28 @@ class HoldHotkey:
         msg = wintypes.MSG()
         try:
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-                if msg.message != WM_HOTKEY:
-                    continue
-                self.on_press()
-                while user32.GetAsyncKeyState(VK_SPACE) & 0x8000:
-                    time.sleep(0.03)
-                self.on_release()
+                if msg.message == WM_HOTKEY:
+                    self._hold(lambda: bool(user32.GetAsyncKeyState(VK_SPACE) & 0x8000))
         finally:
             user32.UnregisterHotKey(None, 1)
+
+    def _hold(self, key_down: Callable[[], bool]) -> None:
+        """One press-hold-release. Errors are logged and reported, never raised: a raise
+        here ends the hotkey thread, and voice would be dead until restart."""
+        self._safe(self.on_press, "press")
+        while key_down():
+            time.sleep(0.03)
+        self._safe(self.on_release, "release")   # always, so the UI leaves "listening"
+
+    def _safe(self, fn: Callable[[], None], what: str) -> None:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001 - see _hold
+            log.exception("hotkey %s failed", what)
+            try:
+                self.on_error(f"Voice failed ({type(e).__name__}). Try again.")
+            except Exception:  # noqa: BLE001
+                log.exception("hotkey error report failed")
 
 
 # ---- Speech out ------------------------------------------------------------
