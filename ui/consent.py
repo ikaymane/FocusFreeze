@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QPushButton, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QVBoxLayout, QWidget)
 
 from freezer import sessions
 from freezer.agent import Proposal, block_reason
@@ -35,6 +36,22 @@ FRIENDLY = {
     "steam.exe": "Steam", "steamwebhelper.exe": "Steam", "whatsapp.root.exe": "WhatsApp",
     "obs64.exe": "OBS Studio", "vlc.exe": "VLC",
 }
+
+
+def usd(amount: float) -> str:
+    """'$0.004': plan costs are fractions of a cent, so 4 decimals read as noise."""
+    return f"${amount:.3f}"
+
+
+def planned_line(proposal: Proposal, latency_s: float | None) -> str | None:
+    """'Planned by Muse Spark · 1.8 s · $0.002'. None in simple mode: its banner says why."""
+    if proposal.plan.model == "heuristic":
+        return None
+    parts = ["Planned by Muse Spark"]
+    if latency_s is not None:
+        parts.append(f"{latency_s:.1f} s")
+    parts.append(usd(proposal.plan.cost_usd))
+    return " · ".join(parts)
 
 
 CONTRAST_LINES = 2   # pinned lines: more would push the freeze list off a 560 px card
@@ -115,7 +132,7 @@ class _AppRow(QFrame):
 class ConsentCard(Card):
     decided = Signal(object)  # CardResult, exactly once
 
-    def __init__(self, proposal: Proposal):
+    def __init__(self, proposal: Proposal, latency_s: float | None = None):
         super().__init__(WIDTH, HEIGHT)
         self.proposal = proposal
         self.apps = proposal.apps
@@ -220,7 +237,14 @@ class ConsentCard(Card):
 
         foot = QHBoxLayout()
         self.total = label("", 19, bold=True)
-        foot.addWidget(self.total)
+        left = QVBoxLayout()
+        left.setSpacing(0)
+        left.addWidget(self.total)
+        self.planned: QLabel | None = None
+        if text := planned_line(proposal, latency_s):
+            self.planned = label(text, color=theme.MUTED)
+            left.addWidget(self.planned)
+        foot.addLayout(left)
         foot.addStretch(1)
         self.cancel_btn = QPushButton("Cancel", clicked=self.cancel)
         self.freeze_btn = QPushButton("Freeze", objectName="primary", clicked=self.accept)

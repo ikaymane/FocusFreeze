@@ -126,6 +126,8 @@ class Controller(QObject):
         self.card = None                  # ConsentCard or GuardianCard
         self.prompt: PromptCard | None = None
         self.stats = Stats()
+        self._plan_started: float | None = None
+        self._plan_answered: float | None = None
         self._show_card.connect(self._open_card)
         self._show_question.connect(self._open_question)
         self._voice_text.connect(self.handle_transcript)
@@ -142,6 +144,7 @@ class Controller(QObject):
             return
         self._close_prompt()
         self._abort.clear()
+        self._plan_started = self._plan_answered = None
         self.status.emit("Reading your open apps...")
         self.thinking.emit(True)
         self._job = self._worker.submit(self._guarded, self._run_focus, task, session)
@@ -166,6 +169,7 @@ class Controller(QObject):
             return
         self._ram_pct = event.ram_pct
         self._abort.clear()
+        self._plan_started = self._plan_answered = None
         self._job = self._worker.submit(self._guarded, self._run_pressure, event)
 
     def shutdown(self) -> None:
@@ -322,8 +326,19 @@ class Controller(QObject):
         self.status.emit("AI unavailable, using the simple idle rule.")
 
     def _on_progress(self, stage: str, attempt: int) -> None:
+        # Worker thread. Latency runs from the first request to the last response,
+        # retries included: what the user actually waited.
+        now = time.monotonic()
+        if stage == "request" and attempt <= 1:
+            self._plan_started, self._plan_answered = now, None
+        elif stage == "response":
+            self._plan_answered = now
         if stage == "request":
             self.status.emit("Asking Muse Spark..." if attempt <= 1 else f"Asking Muse Spark again ({attempt})...")
+
+    def plan_latency_s(self) -> float | None:
+        started, answered = self._plan_started, self._plan_answered
+        return answered - started if started is not None and answered is not None else None
 
     def _thaw_all(self) -> list[str]:
         restored = self.actuator.thaw_all()
@@ -346,7 +361,7 @@ class Controller(QObject):
                 answer.set_result(result)
 
         def open_consent() -> None:
-            card = ConsentCard(proposal)
+            card = ConsentCard(proposal, latency_s=self.plan_latency_s())
             self.card = card
             card.decided.connect(finish)
             card.present()

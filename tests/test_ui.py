@@ -567,3 +567,29 @@ def test_ai_vs_timer_hidden_in_simple_mode(ctl, qapp, monkeypatch):
     assert card.proposal.vs_timer == [] and card.contrast_box is None
     card.cancel()
     wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_card_footer_says_who_planned_it_how_fast_and_for_how_much(ctl, qapp):
+    import re
+
+    card = open_login_card(ctl, qapp)
+    assert card.planned is not None
+    assert re.fullmatch(r"Planned by Muse Spark · \d+\.\d s · \$0\.002", card.planned.text())
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_card_footer_hidden_in_simple_mode(ctl, qapp, monkeypatch):
+    monkeypatch.setattr(mocks, "fallback_reason", "the AI didn't answer in time")
+    card = open_login_card(ctl, qapp)
+    assert card.proposal.plan.model == "heuristic" and card.planned is None
+    card.cancel()
+    wait_until(qapp, lambda: not ctl.busy)
+
+
+def test_plan_latency_runs_from_first_request_to_last_response(ctl):
+    ctl._on_progress("request", 1)
+    started = ctl._plan_started
+    ctl._on_progress("request", 2)          # a retry keeps the first start
+    ctl._on_progress("response", 2)
+    assert ctl._plan_started == started and ctl.plan_latency_s() >= 0
