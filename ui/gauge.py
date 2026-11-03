@@ -86,6 +86,7 @@ class Gauge(QWidget):
         self._status_prev = ""
         self._status_t = 1.0     # crossfade from the previous status line
         self._press_at = QPoint()
+        self.hotkey = "Ctrl+Alt+Space"   # replaced by the combo the app actually got
 
         self.ram = read()
         self._shown_pct = round(self.ram.pct, 1)
@@ -142,6 +143,10 @@ class Gauge(QWidget):
             return
         self._status_prev, self.status, self._status_t = self.status, text, 0.0
         self._wake()
+
+    def set_hotkey(self, label: str) -> None:
+        self.hotkey = label
+        self.update()
 
     def set_listening(self, on: bool) -> None:
         self.listening = on
@@ -266,7 +271,7 @@ class Gauge(QWidget):
         p.setOpacity(1.0)
 
     def _status_text(self, status: str) -> str:
-        text = status or "Hold Ctrl+Alt+Space and say what you're working on"
+        text = status or f"Hold {self.hotkey} and say what you're working on"
         return f"Simulated. {text}" if self.simulated else text
 
     def _paint_number(self, p: QPainter) -> None:

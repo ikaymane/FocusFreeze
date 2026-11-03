@@ -28,7 +28,6 @@ COMPACT = (f"QPushButton {{ padding: 5px 12px; font-size: {theme.SMALL}px; }}"
            f"QLineEdit {{ padding: 6px 8px; font-size: {theme.SMALL}px; }}")
 LINGER_MS = 1500   # after the last words, so you can read what was heard
 CHIP_GAP = 6
-HINT = "Hold Ctrl+Alt+Space and speak"
 
 
 class VoiceBar(Card):
@@ -41,7 +40,8 @@ class VoiceBar(Card):
         self.frame.setStyleSheet(COMPACT)
         self.body.setContentsMargins(14, 12, 14, 12)
         self.body.setSpacing(8)
-        self.transcript = label(HINT, theme.SMALL, color=theme.ICE, wrap=True)
+        self.hotkey = "Ctrl+Alt+Space"   # replaced by the combo the app actually got
+        self.transcript = label(self.hint(), theme.SMALL, color=theme.ICE, wrap=True)
         self.body.addWidget(self.transcript)
         row = QHBoxLayout()
         self.edit = QLineEdit(placeholderText="Or type, then Enter")
@@ -77,6 +77,15 @@ class VoiceBar(Card):
         self._anim.valueChanged.connect(self._apply_t)
         self._anim.finished.connect(self._settled)
         self._linger = QTimer(self, singleShot=True, interval=LINGER_MS, timeout=self.close_drawer)
+
+    def hint(self) -> str:
+        return f"Hold {self.hotkey} and speak"
+
+    def set_hotkey(self, label: str) -> None:
+        showing_hint = self.transcript.text() == self.hint()
+        self.hotkey = label
+        if showing_hint:
+            self.transcript.setText(self.hint())
 
     # ---- placement -----------------------------------------------------------
 
@@ -154,7 +163,7 @@ class VoiceBar(Card):
     def _settled(self) -> None:
         if not self.opened and self._t <= 0.0:
             self.hide()
-            self.transcript.setText(HINT)
+            self.transcript.setText(self.hint())
             self._fit()
 
     # ---- voice ---------------------------------------------------------------
