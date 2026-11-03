@@ -140,9 +140,17 @@ def test_stats_card_lands_on_exact_values(qapp):
     card = StatsCard(Stats(2700, 4, 48, 0.0021, 2700, 3.2))
     card.present()
     wait_until(qapp, lambda: not any(i is card for i in fx.ticker()._items), timeout=4)
-    assert [c[0].text() for c in card.counters] == ["2.6 GB", "48 min", "4", "$0.0021"]
+    assert [c[0].text() for c in card.counters] == ["2.6 GB", "48 min", "4", "$0.002"]
     assert "Restored 2.6 GB in 3.2s" in card_texts(card)
+    assert "AI cost · under 1 cent" in card_texts(card)
     card.close()
+
+
+def test_stats_cost_caption_only_says_under_a_cent_when_true():
+    from ui.stats import cost_caption
+
+    assert cost_caption(0.004) == "AI cost · under 1 cent"
+    assert cost_caption(0.0123) == "AI cost" and cost_caption(0.0) == "AI cost"
 
 
 def test_blocked_app_can_never_be_frozen(ctl, qapp):
