@@ -518,3 +518,32 @@ def test_live_policy_hard_blocks_the_active_sessions_rules():
     assert policy(["steam.exe"], desk).allowed == []
     active["name"] = None                                      # switched away: no session rules
     assert policy(["discord.exe", "acrord32.exe"], desk).allowed == ["discord.exe", "acrord32.exe"]
+
+
+def test_own_pids_protect_every_ancestor_and_the_watchdog():
+    """Started as terminal -> shell -> venv launcher -> python, getppid() is only the
+    launcher. The shell and terminal running Focus Freeze must be 'self' too."""
+    import json
+    import subprocess
+    import sys
+
+    from ui.app import own_pids
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    inner = f"import json, sys; sys.path.insert(0, {root!r}); from ui.app import own_pids; print(json.dumps(sorted(own_pids())))"
+    middle = f"import subprocess, sys; sys.exit(subprocess.run([{sys.executable!r}, '-c', {inner!r}]).returncode)"
+    base = getattr(sys, "_base_executable", sys.executable)   # one extra level, like a shell
+    out = subprocess.run([base, "-c", middle], capture_output=True, text=True, timeout=60, check=True)
+    assert os.getpid() in json.loads(out.stdout.strip().splitlines()[-1])   # two or more levels up
+
+    dog = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        time.sleep(1.0)   # a venv launcher starts its real interpreter as a child
+        import psutil
+        kids = {c.pid for c in psutil.Process(dog.pid).children(recursive=True)}
+        assert {dog.pid} | kids <= own_pids(dog.pid)
+    finally:
+        import psutil
+        for c in psutil.Process(dog.pid).children(recursive=True):
+            c.kill()
+        dog.kill()

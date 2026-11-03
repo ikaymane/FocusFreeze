@@ -431,13 +431,36 @@ def connect_gauge(ctl: Controller, gauge: Gauge, overlay: MotionOverlay,
     ctl.thawed.connect(thawed)
 
 
+def own_pids(watchdog_pid: int | None = None) -> set[int]:
+    """This process, every ancestor and the watchdog with its children. getppid() alone
+    is the venv launcher, which left the shell and terminal running us freezable."""
+    import psutil
+    pids = {os.getpid(), os.getppid()}
+    try:
+        pids |= {p.pid for p in psutil.Process().parents()}
+    except psutil.Error:
+        log.warning("could not read our parent processes", exc_info=True)
+    if watchdog_pid:
+        pids.add(watchdog_pid)
+        try:
+            pids |= {c.pid for c in psutil.Process(watchdog_pid).children(recursive=True)}
+        except psutil.Error:
+            pass   # the watchdog is gone; its PID stays protected anyway
+    return pids
+
+
 class SessionPolicy:
     """B's policy for whichever session is active. Its never-freeze and keep rules are
     hard blocks, re-read on every call, so a session switch or a new rule applies at once."""
 
-    def __init__(self, self_pids):
-        self.self_pids = self_pids
+    def __init__(self, self_pids: set[int] | None = None):
+        self.fixed_pids = self_pids        # None: own_pids() on every call
+        self.watchdog_pid: int | None = None
         self.active: Callable[[], str | None] = lambda: None   # main() points this at the agent
+
+    @property
+    def self_pids(self) -> set[int]:
+        return self.fixed_pids if self.fixed_pids is not None else own_pids(self.watchdog_pid)
 
     def __call__(self, freeze_ids, snapshots):
         from freezer.policy import policy_for
@@ -454,7 +477,7 @@ def make_parts(live_planner: bool, live: bool = False) -> dict:
         # Real titles: the default model, never the contributor one, which trains on
         # what it receives. The tracker supplies the idle times the guardian needs.
         return dict(sensor=RealSensor(ForegroundTracker().start()),
-                    policy=SessionPolicy({os.getpid(), os.getppid()}),
+                    policy=SessionPolicy(),
                     actuator=RealActuator())
     if not live_planner:
         mocks.install()
@@ -503,8 +526,9 @@ def main() -> int:
         heartbeat.start()
         app.aboutToQuit.connect(heartbeat.stop)
         # Its own process: it thaws when the heartbeat goes stale or this process exits.
-        subprocess.Popen([sys.executable, "-m", "freezer.watchdog", "--parent", str(os.getpid())],
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        watchdog = subprocess.Popen([sys.executable, "-m", "freezer.watchdog", "--parent", str(os.getpid())],
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        parts["policy"].watchdog_pid = watchdog.pid
     else:
         ram = lambda: mocks.ram_for(actuator)
         guardian = Guardian(ram_pct=lambda: ram().pct)
