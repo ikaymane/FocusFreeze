@@ -449,3 +449,15 @@ def test_live_exe_names_read_as_app_names_but_ids_stay_exact():
     assert app_name("discord.exe", live) == "Discord"
     assert app_name("steam.exe", mock) == "Steam (library)"
     assert app_name("unknown.exe", None) == "unknown.exe"
+
+
+def test_live_never_seeds_the_made_up_sessions():
+    """The mock desk's sessions include an auto_freeze one. On a real PC that would
+    freeze real apps with no card, so --live starts with no sessions at all."""
+    from ui.app import seed_demo_sessions
+
+    seed_demo_sessions(live=True, live_planner=False)
+    assert not any(s.auto_freeze for s in sessions.load())
+    assert sessions.load() == []
+    seed_demo_sessions(live=False, live_planner=False)   # the mock desk still gets them
+    assert any(s.auto_freeze for s in sessions.load())

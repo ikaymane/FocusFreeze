@@ -411,6 +411,13 @@ def make_parts(live_planner: bool, live: bool = False) -> dict:
                 model="muse-spark-1.3-contributor")
 
 
+def seed_demo_sessions(live: bool, live_planner: bool) -> None:
+    """Made-up sessions for the mock desk only. One of them auto-freezes, so on a real
+    PC it could freeze real apps with no card: never in --live."""
+    if not live and not live_planner:
+        mocks.seed_sessions()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Focus Freeze tray app, on mock parts.")
     ap.add_argument("--live-planner", action="store_true", help="call Muse Spark instead of the mock plan")
@@ -433,8 +440,7 @@ def main() -> int:
     speaker = Speaker()
     parts = make_parts(args.live_planner, args.live)
     actuator = parts["actuator"]
-    if not args.live_planner:
-        mocks.seed_sessions()   # synthetic sessions, also in --live
+    seed_demo_sessions(args.live, args.live_planner)
     actuator.thaw_all()  # contract: recover anything a crashed run left frozen
     if args.live:
         ram = read_ram
