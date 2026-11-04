@@ -565,22 +565,41 @@ class Speaker:
         our own voice. It runs even when there is no speech engine."""
         self._queue.put((text, then))
 
-    def _loop(self) -> None:
+    @staticmethod
+    def _engine() -> Callable[[str], None] | None:
+        """Windows SAPI, called directly: Speak() blocks until the line is said, every time.
+        pyttsx3's runAndWait() returns at once from the second line on, so only the first
+        reply was ever heard; it stays as the fallback off Windows."""
+        try:
+            import pythoncom
+            import win32com.client
+            pythoncom.CoInitialize()           # this thread owns the voice
+            voice = win32com.client.Dispatch("SAPI.SpVoice")
+            return lambda text: voice.Speak(text)
+        except Exception:  # noqa: BLE001
+            log.debug("SAPI unavailable, trying pyttsx3", exc_info=True)
         try:
             import pyttsx3
             engine = pyttsx3.init()
         except Exception:  # noqa: BLE001 - no TTS: the text on screen is enough
             log.warning("no speech engine; replies are shown, not spoken", exc_info=True)
-            engine = None
+            return None
+
+        def speak(text: str) -> None:
+            engine.say(text)
+            engine.runAndWait()
+        return speak
+
+    def _loop(self) -> None:
+        speak = self._engine()
         while True:
             text, then = self._queue.get()
-            if engine is not None:
+            if speak is not None:
                 try:
-                    engine.say(text)
-                    engine.runAndWait()
+                    speak(text)
                 except Exception:  # noqa: BLE001
                     log.exception("speech failed; replies are shown, not spoken")
-                    engine = None
+                    speak = None
             if then is not None:
                 try:
                     then()
