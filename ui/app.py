@@ -662,6 +662,18 @@ def main() -> int:
     ptt = PushToTalk(ctl.voice_heard, ctl.status.emit, on_partial=ctl.transcript.emit, on_level=ctl.level.emit)
     scripted = list(mocks.TRANSCRIPTS)
 
+    def choose_mic() -> None:
+        """Off the GUI thread: half a second of listening to every input."""
+        try:
+            name = ptt.choose_mic()
+        except Exception:  # noqa: BLE001 - voice still runs on Windows' default
+            log.exception("could not choose a microphone")
+            return
+        print(f"Microphone: {name}", file=sys.stderr)
+
+    if ptt.api_key:
+        threading.Thread(target=choose_mic, daemon=True, name="ff-mic").start()
+
     def press() -> None:
         ctl.listening.emit(True)
         try:

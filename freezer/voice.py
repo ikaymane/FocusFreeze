@@ -32,6 +32,65 @@ MAX_HOLD_S = 60              # a stuck key must not stream (and bill) forever
 CLOSE_TIMEOUT_S = 8         # after endStream: longer than this and the server has gone silent
 USD_PER_MINUTE = 0.003
 NOT_CAUGHT = "Didn't catch that. Hold the voice key and try again."
+SILENT_RMS = 400             # a hold that never got this loud heard no one (dead jack, muted mic)
+QUIET_FACTOR = 0.25          # Windows' default mic loses only if this much quieter than another
+
+
+# ---- Microphone choice -----------------------------------------------------
+# Windows' default recording device is often an empty jack ("Prise microphone",
+# "Line In") while the real mic is the next entry. Streaming the default then
+# sends silence and every command comes back as "didn't catch that".
+
+def input_devices() -> list[tuple[int, str]]:
+    """Real inputs on one host API (MME on Windows), without the Sound Mapper alias."""
+    import sounddevice as sd
+    apis = sd.query_hostapis()
+    api = next((i for i, h in enumerate(apis) if h["name"] == "MME"), sd.default.hostapi)
+    return [(i, d["name"]) for i, d in enumerate(sd.query_devices())
+            if d["max_input_channels"] > 0 and d["hostapi"] == api
+            and not any(w in d["name"].lower() for w in ("mapper", "mappeur"))]
+
+
+def measure_inputs(devices: list[int], seconds: float = 0.5) -> dict[int, float]:
+    """Median loudness of each device, all recorded at once. One that won't open is left out."""
+    import numpy as np
+    import sounddevice as sd
+
+    levels: dict[int, list[float]] = {}
+    streams = []
+    for i in devices:
+        out: list[float] = []
+
+        def on_audio(data, _count, _time, _status, out=out) -> None:
+            pcm = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+            out.append(float(np.sqrt(np.mean(pcm * pcm))))
+        try:
+            stream = sd.RawInputStream(device=i, samplerate=SAMPLE_RATE, channels=1, dtype="int16",
+                                       blocksize=FRAME_SAMPLES, callback=on_audio)
+            stream.start()
+        except Exception:  # noqa: BLE001 - busy or unsupported device: not a candidate
+            continue
+        levels[i] = out
+        streams.append(stream)
+    time.sleep(seconds)
+    for stream in streams:
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return {i: float(np.median(v)) for i, v in levels.items() if v}
+
+
+def pick_mic(levels: dict[int, float], default: int | None) -> int | None:
+    """Windows' default, unless another input is far louder: a live mic always hears
+    some room noise, an empty jack hears close to nothing."""
+    if not levels:
+        return default
+    best = max(levels, key=levels.__getitem__)
+    if default in levels and levels[default] >= levels[best] * QUIET_FACTOR:
+        return default
+    return best
 
 
 # ---- Commands --------------------------------------------------------------
@@ -168,10 +227,46 @@ class PushToTalk:
         self._stream = None
         self._lock = threading.Lock()
         self._started = 0.0
+        self.device: int | None = None   # None: Windows' default until choose_mic() runs
+        self.mic_name = "default microphone"
 
     @property
     def active(self) -> bool:
         return self._stream is not None
+
+    def choose_mic(self) -> str:
+        """FF_MIC (index or part of the name) wins; else the default, unless it is silent
+        next to another input. Takes half a second, so call it off the GUI thread."""
+        import sounddevice as sd
+
+        devices = input_devices()
+        names = dict(devices)
+        want = os.environ.get("FF_MIC", "").strip().lower()
+        if want:
+            match = next((i for i, n in devices if want == str(i) or want in n.lower()), None)
+            if match is not None:
+                self.device, self.mic_name = match, names[match]
+                return self.mic_name
+            log.warning("FF_MIC=%r matches no input; choosing one", want)
+        default = sd.default.device[0]
+        if default is None or default < 0:
+            default = sd.query_devices(kind="input")["index"]
+        chosen = pick_mic(measure_inputs([i for i, _ in devices]), default)
+        self.device = chosen
+        self.mic_name = names.get(chosen, self.mic_name) if chosen is not None else self.mic_name
+        log.info("microphone: %s", self.mic_name)
+        return self.mic_name
+
+    def _silence_hint(self) -> str:
+        """The hold heard nothing: look again, and switch if another input is alive."""
+        before = self.device
+        try:
+            self.choose_mic()
+        except Exception:  # noqa: BLE001 - the hint must still reach the user
+            log.exception("could not re-check the microphone")
+        if self.device != before:
+            return f"Your mic was silent. Switched to {self.mic_name}: hold the key and try again."
+        return f"Heard only silence from {self.mic_name}. Is it muted? (Set FF_MIC to pick another.)"
 
     def press(self) -> None:
         import numpy as np
@@ -184,23 +279,28 @@ class PushToTalk:
                 self.on_error("Voice needs MODEL_API_KEY. Use the tray menu instead.")
                 return
             frames: queue.Queue[bytes | None] = queue.Queue()
+            hold = {"peak": 0.0}   # loudest frame of this hold, to tell silence from a bad transcript
 
             def on_audio(data, _count, _time, _status) -> None:
                 frames.put(bytes(data))
+                pcm = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                rms = float(np.sqrt(np.mean(pcm * pcm)))
+                hold["peak"] = max(hold["peak"], rms)
                 if self.on_level:
-                    pcm = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                    self.on_level(min(float(np.sqrt(np.mean(pcm * pcm))) / 6000, 1.0))
+                    self.on_level(min(rms / 6000, 1.0))
 
             try:
-                stream = sd.RawInputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
-                                           blocksize=FRAME_SAMPLES, callback=on_audio)
+                stream = sd.RawInputStream(device=self.device, samplerate=SAMPLE_RATE, channels=1,
+                                           dtype="int16", blocksize=FRAME_SAMPLES, callback=on_audio)
                 stream.start()
             except Exception as e:  # no mic, device busy, permission denied
                 self.on_error(f"Could not open the microphone: {e}")
                 return
             self._frames, self._stream, self._started = frames, stream, time.monotonic()
-        threading.Thread(target=self._run, args=(frames,), daemon=True, name="ff-voice").start()
-        threading.Timer(MAX_HOLD_S, self._expire, args=(frames,)).start()
+        threading.Thread(target=self._run, args=(frames, hold), daemon=True, name="ff-voice").start()
+        expire = threading.Timer(MAX_HOLD_S, self._expire, args=(frames,))
+        expire.daemon = True   # else Quit waits up to MAX_HOLD_S for it
+        expire.start()
 
     def release(self) -> None:
         with self._lock:
@@ -217,19 +317,23 @@ class PushToTalk:
         if self._frames is frames:
             self.release()
 
-    def _run(self, frames: queue.Queue) -> None:
+    def _run(self, frames: queue.Queue, hold: dict | None = None) -> None:
+        silent = lambda: hold is not None and hold["peak"] < SILENT_RMS  # noqa: E731
         try:
             text, audio_ms = asyncio.run(transcribe(frames, self.api_key, self.on_partial))
         except VoiceError as e:
             self.release()
-            self.on_error(str(e))
+            self.on_error(self._silence_hint() if silent() and str(e) == NOT_CAUGHT else str(e))
         except Exception:  # noqa: BLE001 - a voice bug must not end in silence
             log.exception("transcription failed")
             self.release()
             self.on_error(NOT_CAUGHT)
         else:
             self.release()  # the server can finish first; the mic must not outlive the stream
-            self.on_transcript(text, audio_ms / 60_000 * USD_PER_MINUTE)
+            if not text.strip() and silent():
+                self.on_error(self._silence_hint())
+            else:
+                self.on_transcript(text, audio_ms / 60_000 * USD_PER_MINUTE)
 
 
 def listen_once(scripted: list[str] | None = None, max_s: float = 6.0, silence_s: float = 0.8) -> str:
@@ -394,9 +498,10 @@ def _main() -> None:
         print(f"\n{text!r} -> {parse_command(text)}  (${cost:.5f})")
 
     ptt = PushToTalk(show, lambda m: print(f"\n[error] {m}"), lambda t: print(f"\r{t}", end=""))
-    hotkey = HoldHotkey(ptt.press, ptt.release, lambda m: print(f"[error] {m}"))
+    print(f"Microphone: {ptt.choose_mic()}")
+    hotkey = HoldHotkey(ptt.press, ptt.release, lambda m: print(f"[error] {m}"),
+                        on_ready=lambda combo: print(f"Hold {combo} and speak. Ctrl+C quits."))
     hotkey.start()
-    print("Hold Ctrl+Alt+Space and speak. Ctrl+C quits.")
     try:
         while True:
             time.sleep(0.5)
