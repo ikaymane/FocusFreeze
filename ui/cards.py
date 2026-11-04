@@ -110,18 +110,27 @@ class Card(QWidget):
 
 
 class PromptCard(Card):
-    """Typed fallback for "Focus..." and for questions the planner asks."""
+    """Centre of the screen: "Focus...", questions the planner asks, and the guardian's
+    "What are you focusing on?". Answer by voice or by typing."""
     submitted = Signal(str)
+    cancelled = Signal()     # the user said no: Cancel or Esc, not a programmatic close
 
-    def __init__(self, question: str, placeholder: str = ""):
+    def __init__(self, question: str, placeholder: str = "", subtitle: str = ""):
         super().__init__(460)
+        self.question = question
         self.body.addWidget(label(question, 19, bold=True, wrap=True))
+        self.subtitle = label(subtitle, theme.TEXT, color=theme.MUTED, wrap=True)
+        self.subtitle.setVisible(bool(subtitle))
+        self.body.addWidget(self.subtitle)
+        self.mic = label("", theme.TEXT, color=theme.ICE, wrap=True)
+        self.mic.hide()
+        self.body.addWidget(self.mic)
         self.edit = QLineEdit(placeholderText=placeholder)
         self.edit.returnPressed.connect(self._submit)
         self.body.addWidget(self.edit)
         foot = QHBoxLayout()
         foot.addStretch(1)
-        foot.addWidget(QPushButton("Cancel", clicked=self.close))
+        foot.addWidget(QPushButton("Cancel", clicked=self.cancel))
         foot.addWidget(QPushButton("Go", objectName="primary", clicked=self._submit))
         self.body.addLayout(foot)
 
@@ -129,6 +138,37 @@ class PromptCard(Card):
         super().present()
         self.activateWindow()
         self.edit.setFocus()
+
+    def set_listening(self, on: bool) -> None:
+        """The mic opened for this question, no key held."""
+        if on:
+            self.mic.setText("🎙 Listening... just answer")
+            self.mic.show()
+        elif self.mic.text().startswith("🎙"):
+            self.mic.hide()
+        self._refit()
+
+    def show_heard(self, text: str) -> None:
+        if text:
+            self.mic.setText(f"“{text}”")
+            self.mic.show()
+            self._refit()
+
+    def _refit(self) -> None:
+        """Height follows the content; the card keeps its top edge."""
+        self.layout().invalidate()
+        self.layout().activate()
+        self.resize(self.width(), self.layout().totalHeightForWidth(self.width()))
+
+    def cancel(self) -> None:
+        self.cancelled.emit()
+        self.close()
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() == Qt.Key.Key_Escape:
+            self.cancel()
+        else:
+            super().keyPressEvent(e)
 
     def _submit(self) -> None:
         if text := self.edit.text().strip():

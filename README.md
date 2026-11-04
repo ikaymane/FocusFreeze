@@ -87,7 +87,8 @@ everything for you.
 <td valign="top">
 
 ### 📈 Step in under pressure
-When RAM climbs on its own, a guardian offers to help, and **it still asks first**. Auto-freeze is
+When RAM passes 85%, it asks out loud, *“What are you focusing on?”*, and listens for your answer
+with no key to hold. Then it plans, shows the card, and **still waits for your yes**. Auto-freeze is
 opt-in per focus session and capped per event.
 
 </td>
@@ -183,7 +184,8 @@ freezing, never a wrong freeze.
 
 **Privacy:** real window titles never go to contributor models, and no model sees them until
 `FF_PAID_BALANCE=1` confirms a paid Meta balance. Until then the agent runs in simple mode (the idle
-rule). The microphone is open only while you hold the key.
+rule). The microphone is open only while you hold the key, or for one answer right after Focus
+Freeze asks you a question out loud.
 
 <img src="docs/readme/divider.svg" width="100%" alt="">
 
@@ -240,6 +242,9 @@ python -m demo.live_check                      # scripted check that freezes onl
 | `FF_HOME` | where sessions, the ledger, the audit log and usage live | `~/.focusfreeze` |
 | `FF_COST_CAP_USD` | the planner stops calling the API past this spend | `20` |
 | `FF_MIC` | microphone to use, by index or part of its name | the default mic |
+| `FF_GUARDIAN_PCT` | RAM percent that wakes the guardian | `85` |
+| `FF_GUARDIAN_SUSTAIN_S` | seconds RAM must stay above it first | `30` |
+| `FF_ASK_ON_PRESSURE` | `0` offers idle apps instead of asking what you're focusing on | `1` |
 | `FF_REDUCED_MOTION` | `1` turns the full-screen freeze effect off | off |
 </details>
 
