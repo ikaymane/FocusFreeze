@@ -58,7 +58,16 @@ simple mode (the idle rule).
 Freezing means suspending the process and paging its RAM to disk: the window stays open, nothing is closed, and thawing resumes it exactly where it was.
 
 ## Team
-Nassime Gharib (UI, voice, demo) · Aymane Idrissi Khamlichi (AI, sensor, policy) · Yassine Belaidi (systems: actuator, ledger, watchdog)
+
+<p align="center">
+  <img src="docs/readme/team.svg" alt="Team cards: Nassime Gharib (UI, voice, demo), Aymane Idrissi Khamlichi (AI, sensor, policy), Yassine Belaidi (systems: actuator, ledger, watchdog)" width="100%">
+</p>
+
+| | Who | Owns |
+|---|---|---|
+| 🎙️ | **Nassime Gharib** | UI, voice, demo: [ui/](ui/), [freezer/voice.py](freezer/voice.py), [demo/](demo/) |
+| 🧠 | **Aymane Idrissi Khamlichi** | AI, sensor, policy: [freezer/planner.py](freezer/planner.py), [freezer/sensor.py](freezer/sensor.py), [freezer/policy.py](freezer/policy.py), [eval/](eval/) |
+| 🧊 | **Yassine Belaidi** | Systems: [freezer/actuator.py](freezer/actuator.py), [freezer/ledger.py](freezer/ledger.py), [freezer/watchdog.py](freezer/watchdog.py), [freezer/guardian.py](freezer/guardian.py) |
 
 ## Quick start
 ```
