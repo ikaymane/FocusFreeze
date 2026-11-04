@@ -30,6 +30,8 @@ FRAME_SAMPLES = 1920         # 80 ms, 3840 bytes of 16-bit mono PCM
 KEYWORDS = ["focus", "freeze", "session", "I'm done", "bring them back"]
 MAX_HOLD_S = 60              # a stuck key must not stream (and bill) forever
 CLOSE_TIMEOUT_S = 8         # after endStream: longer than this and the server has gone silent
+OPEN_TIMEOUT_S = 10          # TCP+TLS+upgrade, then again for the session ack
+CONNECT_ATTEMPTS = 2         # a slow handshake is usually a blip; frames wait in the queue meanwhile
 USD_PER_MINUTE = 0.003
 NOT_CAUGHT = "Didn't catch that. Hold the voice key and try again."
 SILENT_RMS = 400             # a hold that never got this loud heard no one (dead jack, muted mic)
@@ -142,14 +144,16 @@ _CLOSE_REASONS = {
 }
 
 
-async def transcribe(frames: "queue.Queue[bytes | None]", api_key: str,
-                     on_partial: Callable[[str], None] | None = None) -> tuple[str, int]:
-    """Stream PCM frames until a None arrives. Returns (transcript, audio ms)."""
+async def _open_session(api_key: str):
+    """Connect and get the session ack. A timeout or network error is retried: nothing
+    has been read from the frame queue yet, so the user's speech is not lost."""
     import websockets
 
-    loop = asyncio.get_running_loop()
-    try:
-        async with websockets.connect(WS_URL, max_size=2**20, open_timeout=10, close_timeout=2) as ws:
+    for attempt in range(1, CONNECT_ATTEMPTS + 1):
+        ws = None
+        try:
+            ws = await websockets.connect(WS_URL, max_size=2**20, open_timeout=OPEN_TIMEOUT_S,
+                                          close_timeout=2)
             # This endpoint ignores the Authorization header: the key goes in the first frame.
             await ws.send(json.dumps({
                 "authorization": {"accessToken": f"Bearer {api_key}"},
@@ -158,10 +162,29 @@ async def transcribe(frames: "queue.Queue[bytes | None]", api_key: str,
                 "mode": "PUSH_TO_TALK",
                 "keywords": KEYWORDS,
             }))
-            ack = json.loads(await asyncio.wait_for(ws.recv(), 10))
-            if ack.get("type") == "error" or "sessionId" not in ack:
-                raise VoiceError(ack.get("message") or "The voice service refused the session.")
+            ack = json.loads(await asyncio.wait_for(ws.recv(), OPEN_TIMEOUT_S))
+        except (OSError, asyncio.TimeoutError) as e:
+            if ws is not None:
+                await ws.close()
+            if attempt == CONNECT_ATTEMPTS:
+                raise
+            log.warning("voice handshake failed (%s), retrying", type(e).__name__)
+            continue
+        if ack.get("type") == "error" or "sessionId" not in ack:
+            await ws.close()
+            raise VoiceError(ack.get("message") or "The voice service refused the session.")
+        return ws
+    raise AssertionError("unreachable")
 
+
+async def transcribe(frames: "queue.Queue[bytes | None]", api_key: str,
+                     on_partial: Callable[[str], None] | None = None) -> tuple[str, int]:
+    """Stream PCM frames until a None arrives. Returns (transcript, audio ms)."""
+    import websockets
+
+    loop = asyncio.get_running_loop()
+    try:
+        async with await _open_session(api_key) as ws:
             ended = asyncio.Event()
 
             async def send_audio() -> None:
