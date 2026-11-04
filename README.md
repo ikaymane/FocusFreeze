@@ -11,7 +11,7 @@
   <img alt="Muse Spark 1.3" src="https://img.shields.io/badge/planner-muse--spark--1.3-8ED8EE?style=flat-square&labelColor=121D25">
   <img alt="Muse Voice" src="https://img.shields.io/badge/voice-muse--voice--transcribe--1.0-8ED8EE?style=flat-square&labelColor=121D25">
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-A5B4BD?style=flat-square&labelColor=121D25">
-  <img alt="458 tests" src="https://img.shields.io/badge/tests-458%20offline-6FD08C?style=flat-square&labelColor=121D25">
+  <a href="https://github.com/ikaymane/Meta_Hackathon/actions/workflows/tests.yml"><img alt="tests" src="https://img.shields.io/github/actions/workflow/status/ikaymane/Meta_Hackathon/tests.yml?branch=main&style=flat-square&label=tests&labelColor=121D25"></a>
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-6FD08C?style=flat-square&labelColor=121D25">
 </p>
 
