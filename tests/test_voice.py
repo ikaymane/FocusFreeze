@@ -85,6 +85,41 @@ def test_protocol_handshake_audio_endstream_final():
     assert partials[0] == "I'm" and partials[-1] == "I'm done"
 
 
+def test_slow_ack_is_retried_without_losing_audio(monkeypatch):
+    """One stalled handshake showed 'Could not reach the voice service (TimeoutError)'
+    though the service was fine on the next try."""
+    monkeypatch.setattr(voice, "OPEN_TIMEOUT_S", 0.3)
+    calls = {"n": 0, "audio": []}
+
+    async def server(ws):
+        calls["n"] += 1
+        await ws.recv()
+        if calls["n"] == 1:
+            await asyncio.sleep(2)   # never acks in time
+            return
+        await ws.send(json.dumps({"sessionId": "s2"}))
+        async for msg in ws:
+            if isinstance(msg, bytes):
+                calls["audio"].append(msg)
+            elif json.loads(msg) == {"type": "endStream"}:
+                await ws.send(json.dumps({"type": "transcript", "transcript": "focus on taxes",
+                                          "final": True, "audioProcessedMs": 80}))
+
+    text, _ = run_against(server, feed(b"\1" * 3840, None))
+    assert text == "focus on taxes" and calls["n"] == 2 and len(calls["audio"]) == 1
+
+
+def test_handshake_that_always_stalls_is_a_clean_error(monkeypatch):
+    monkeypatch.setattr(voice, "OPEN_TIMEOUT_S", 0.2)
+
+    async def server(ws):
+        await ws.recv()
+        await asyncio.sleep(2)
+
+    with pytest.raises(VoiceError, match="Could not reach"):
+        run_against(server, feed(None))
+
+
 def test_refused_handshake_is_a_clean_error():
     async def server(ws):
         await ws.recv()
