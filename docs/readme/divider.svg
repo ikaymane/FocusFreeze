@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 44" width="1200" height="44" aria-hidden="true">
+<defs>
+  <linearGradient id="line" x1="0" x2="1"><stop offset="0" stop-color="#8ED8EE" stop-opacity="0"/><stop offset=".5" stop-color="#8ED8EE" stop-opacity=".75"/><stop offset="1" stop-color="#8ED8EE" stop-opacity="0"/></linearGradient>
+  <linearGradient id="pulse" x1="0" x2="1"><stop offset="0" stop-color="#B4E7F5" stop-opacity="0"/><stop offset=".5" stop-color="#B4E7F5"/><stop offset="1" stop-color="#B4E7F5" stop-opacity="0"/></linearGradient>
+  <clipPath id="lane"><rect x="0" y="20.0" width="1200" height="4"/></clipPath>
+  <g id="flake" fill="none" stroke-linecap="round"><path d="M0-11V11M-9.5-5.5 9.5 5.5M-9.5 5.5 9.5-5.5" stroke-width="2.4"/><path d="M-3-8 0-5 3-8M-3 8 0 5 3 8M-9.9-1.2-6.1-2.6-7.2-6.4M9.9 1.2 6.1 2.6 7.2 6.4M-9.9 1.2-6.1 2.6-7.2 6.4M9.9-1.2 6.1-2.6 7.2-6.4" stroke-width="1.6"/></g>
+</defs>
+<style>
+  .pulse { animation: pulse 6s cubic-bezier(.65,0,.35,1) infinite; }
+  .pulse2 { animation: pulse2 6s cubic-bezier(.65,0,.35,1) infinite; }
+  @keyframes pulse  { 0% { transform: translateX(0); } 45%,100% { transform: translateX(570.0px); } }
+  @keyframes pulse2 { 0% { transform: translateX(0); } 45%,100% { transform: translateX(-570.0px); } }
+  .spin { transform-box: fill-box; transform-origin: center; animation: spin 24s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .glow { transform-box: fill-box; transform-origin: center; animation: glow 3s cubic-bezier(.65,0,.35,1) infinite alternate; }
+  @keyframes glow { from { opacity: .15; transform: scale(.85); } to { opacity: .4; transform: scale(1.15); } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<rect x="0" y="21.25" width="566.0" height="1.5" fill="url(#line)"/>
+<rect x="634.0" y="21.25" width="566.0" height="1.5" fill="url(#line)"/>
+<g clip-path="url(#lane)">
+  <rect class="pulse" x="-120" y="20.5" width="120" height="3" fill="url(#pulse)"/>
+  <rect class="pulse2" x="1200" y="20.5" width="120" height="3" fill="url(#pulse)"/>
+</g>
+<circle class="glow" cx="600.0" cy="22.0" r="18" fill="#8ED8EE"/>
+<g transform="translate(600.0 22.0)"><use class="spin" href="#flake" stroke="#8ED8EE"/></g>
+</svg>

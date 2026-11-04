@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen   # the UI tests build real widgets, without a screen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # Offline: no API key, nothing real is frozen. GitHub's Windows runners run as
+      # administrator, and Focus Freeze refuses to run elevated, so the two tests that
+      # need an unelevated session are skipped here (they pass on a normal account).
+      - run: >-
+          python -m pytest -q
+          --deselect tests/test_actuator.py::test_is_elevated_matches_windows_admin_check
+          --deselect tests/test_audit_fixes.py::test_unelevated_process_passes_check_and_freezes

@@ -1,0 +1,9 @@
+# Text stays LF in the repo; Windows checkouts may still use CRLF locally.
+* text=auto
+*.py  text eol=lf
+*.svg text eol=lf
+*.md  text eol=lf
+*.ps1 text eol=crlf
+*.gif binary
+*.png binary
+*.pdf binary
