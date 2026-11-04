@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>Meta Global AI Dev Hackathon</b> · Build for Your World<br>
-  <a href="#run">💻 Run it</a> &nbsp;·&nbsp; <a href="#trust">🛡️ Check our work</a> &nbsp;·&nbsp; <a href="docs/threat-model.md">🔐 Threat model</a>
+  <a href="#run">💻 Run it</a> &nbsp;·&nbsp; <a href="#trust">🛡️ Check our work</a> &nbsp;·&nbsp; <a href="docs/threat-model.md">🔐 Threat model</a> &nbsp;·&nbsp; <a href="#built">🗓️ Built during the hackathon</a>
 </p>
 
 <p align="center">
@@ -278,6 +278,27 @@ plans/              the full plan and a guide for each team role
 docs/               threat model · readme/ these pictures (tools/readme_art.py draws them)
 ```
 </details>
+
+<img src="docs/readme/divider.svg" width="100%" alt="">
+
+<a name="built"></a>
+
+## 🗓️ “When were you built?”
+
+> **Focus Freeze:** All of me was built during the hackathon, from an empty repo.
+
+- **First commit:** October 28, 2026 (the plan and role guides). **First code:** October 30.
+  **Last commit before submission:** November 4, 2026.
+- **142 commits and 27 merged pull requests** in this window. The
+  [commit history](https://github.com/ikaymane/Meta_Hackathon/commits/main) and
+  [pull requests](https://github.com/ikaymane/Meta_Hackathon/pulls?q=is%3Apr+is%3Amerged) are the record.
+- **Nothing was carried over** from an earlier project. The agent loop, the Muse Spark planner and
+  its injection defense, the policy, the actuator, the watchdog, the audit log, the voice pipeline,
+  the UI, the eval and the red team were all written here.
+- **Commits authored as `Muse`** were written by Meta's Muse Code agent and reviewed by the team.
+- **Open-source libraries** we use as-is, under their own licenses: `openai` (client for the
+  OpenAI-compatible Meta Model API), `pydantic`, `psutil`, `pycaw`, `pywin32`, `PySide6`,
+  `sounddevice`, `websockets`, `pyttsx3`, `numpy`, `imageio-ffmpeg`, `pytest`, `hypothesis`.
 
 <img src="docs/readme/divider.svg" width="100%" alt="">
 
