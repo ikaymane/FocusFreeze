@@ -70,13 +70,13 @@ Freezing means suspending the process and paging its RAM to disk: the window sta
 ## Team
 
 <p align="center">
-  <img src="docs/readme/crew.svg" alt="Team: Nassime Gharib (UI, voice, demo), Aymane Idrissi Khamlichi (AI, sensor), Yahya Dadsi (policy, security), Yassine Belaidi (systems)" width="100%">
+  <img src="docs/readme/team-cards.svg" alt="Team: Nassime Gharib (UI, voice, demo), Aymane Idrissi Khamlichi (agent, AI safety), Yahya Dadsi (policy, security), Yassine Belaidi (systems)" width="100%">
 </p>
 
 | Who | Role | Code |
 |---|---|---|
 | **Nassime Gharib** | UI, voice, demo | [ui/](ui/) · [freezer/voice.py](freezer/voice.py) · [demo/](demo/) |
-| **Aymane Idrissi Khamlichi** | AI, sensor | [freezer/planner.py](freezer/planner.py) · [freezer/sensor.py](freezer/sensor.py) · [freezer/sessions.py](freezer/sessions.py) · [freezer/cost.py](freezer/cost.py) · [eval/run.py](eval/run.py) |
+| **Aymane Idrissi Khamlichi** | Agent, AI safety | [freezer/agent.py](freezer/agent.py) · [freezer/planner.py](freezer/planner.py) · [freezer/sensor.py](freezer/sensor.py) · [freezer/sessions.py](freezer/sessions.py) · [freezer/cost.py](freezer/cost.py) · [eval/run.py](eval/run.py) |
 | **Yahya Dadsi** | Policy, security | [freezer/policy.py](freezer/policy.py) · [freezer/audit.py](freezer/audit.py) · [docs/threat-model.md](docs/threat-model.md) · [eval/redteam.py](eval/redteam.py) |
 | **Yassine Belaidi** | Systems | [freezer/actuator.py](freezer/actuator.py) · [freezer/ledger.py](freezer/ledger.py) · [freezer/watchdog.py](freezer/watchdog.py) · [freezer/guardian.py](freezer/guardian.py) |
 

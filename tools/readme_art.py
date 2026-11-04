@@ -96,8 +96,9 @@ def chip(text: str, px: float = 14, pad: float = 24) -> tuple[str, float]:
 TEAM = [
     dict(ini="NG", name="Nassime Gharib", role="UI · VOICE · DEMO", color=ICE, grad=("#BDEBF7", "#4A7BD0"),
          sub="What you see and say", chips=["tray & gauge", "consent card", "push-to-talk", "demo video"]),
-    dict(ini="AK", name="Aymane Idrissi Khamlichi", role="AI · SENSOR", color=OK, grad=("#CFF3DA", "#3B9E61"),
-         sub="Which apps your task needs", chips=["Muse Spark planner", "sensor", "eval", "sessions", "cost cap"]),
+    dict(ini="AK", name="Aymane Idrissi Khamlichi", role="AGENT · AI SAFETY", color=OK, grad=("#CFF3DA", "#3B9E61"),
+         sub="Plans every freeze, and can't be tricked",
+         chips=["agent loop", "Muse Spark planner", "injection defense", "eval"]),
     dict(ini="YD", name="Yahya Dadsi", role="POLICY · SECURITY", color=WARN, grad=("#F8EBB8", "#C3931C"),
          sub="What must never freeze", chips=["deny list", "threat model", "red-team", "audit log"]),
     dict(ini="YB", name="Yassine Belaidi", role="SYSTEMS", color=WARM, grad=("#F9D9BA", "#D9604C"),
@@ -139,6 +140,7 @@ def team() -> str:
             cx += w + 8
         assert cx - 8 <= cw - 28, (p["name"], cx)
         assert 150 + tw(p["name"], 26) <= cw - 24, p["name"]
+        assert 150 + tw(p["sub"], 15.5) <= cw - 24, p["sub"]
         body.append(f"""
 <!-- {escape(p["name"])} -->
 <g transform="translate({x} {y})">
@@ -485,7 +487,7 @@ def results() -> str:
                "Focus Freeze results", "".join(css), body, defs)
 
 
-PICTURES = {"banner.svg": hero, "flow.svg": pipeline, "numbers.svg": results, "crew.svg": team}
+PICTURES = {"banner.svg": hero, "flow.svg": pipeline, "numbers.svg": results, "team-cards.svg": team}
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
