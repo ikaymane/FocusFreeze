@@ -693,3 +693,91 @@ def test_plan_latency_runs_from_first_request_to_last_response(ctl):
     ctl._on_progress("request", 2)          # a retry keeps the first start
     ctl._on_progress("response", 2)
     assert ctl._plan_started == started and ctl.plan_latency_s() >= 0
+
+
+# ---- RAM pressure asks "What are you focusing on?" and listens hands-free ----
+
+def talking_ctl(**kw):
+    """A controller whose speech is recorded and whose mic opens are counted."""
+    said, opened = [], []
+
+    def speak(text, then=None):
+        said.append(text)
+        if then:
+            then()                       # the line has been "spoken"
+
+    c = make_ctl(speak=speak, listen=lambda: opened.append(1), ask_on_pressure=True, **kw)
+    return c, said, opened
+
+
+def test_pressure_asks_out_loud_listens_then_plans_and_listens_for_yes(qapp):
+    c, said, opened = talking_ctl()
+    sessions.start("login bug", mocks.LOGIN_TASK)
+    c.on_pressure(mocks.PRESSURE)
+    assert c.prompt_open and c.prompt.question == "What are you focusing on?"
+    assert "91%" in c.prompt.subtitle.text()
+    assert said == ["Your memory is at 91 percent. What are you focusing on?"]
+    wait_until(qapp, lambda: opened == [1])         # mic opened after the question, no key held
+    c.on_pressure(mocks.PRESSURE)                   # still asking: no second prompt
+    assert len(said) == 1
+    c.voice_heard("I'm fixing the login bug")       # the hands-free answer
+    wait_until(qapp, lambda: isinstance(c.card, ConsentCard))
+    assert not c.prompt_open
+    assert said[-1] == "I can freeze 4 apps you don't need for this. Freeze them?"
+    wait_until(qapp, lambda: opened == [1, 1])      # and listens for the yes
+    c.voice_heard("Freeze")
+    wait_until(qapp, lambda: not c.busy)
+    assert frozen(c) == ALLOWED
+    assert said[-1].startswith("Done. I froze 4 apps and freed about 2.6 gigabytes.")
+    c.shutdown()
+
+
+def test_pressure_with_a_known_task_offers_the_guardian_card(qapp):
+    c, said, opened = talking_ctl()
+    card = open_login_card(c, qapp)
+    card.cancel()
+    wait_until(qapp, lambda: not c.busy)
+    c.sensor.age(300)
+    c.on_pressure(mocks.PRESSURE)
+    wait_until(qapp, lambda: c.card)
+    assert isinstance(c.card, GuardianCard) and not c.prompt_open
+    c.card.cancel()
+    wait_until(qapp, lambda: not c.busy)
+    c.shutdown()
+
+
+def test_saying_cancel_to_the_pressure_question_starts_the_cooldown(qapp):
+    dismissed = []
+    c, _said, _opened = talking_ctl(on_guardian_dismiss=lambda: dismissed.append(1))
+    c.on_pressure(mocks.PRESSURE)
+    assert c.prompt_open
+    c.voice_heard("Cancel")
+    wait_until(qapp, lambda: dismissed == [1])
+    assert not c.prompt_open and not c.busy and not frozen(c)
+    c.shutdown()
+
+
+def test_typing_the_answer_turns_hands_free_off(qapp):
+    c, said, opened = talking_ctl()
+    sessions.start("login bug", mocks.LOGIN_TASK)
+    c.on_pressure(mocks.PRESSURE)
+    wait_until(qapp, lambda: opened == [1])
+    c.prompt.edit.setText("I'm fixing the login bug")
+    c.prompt._submit()
+    wait_until(qapp, lambda: isinstance(c.card, ConsentCard))
+    qapp.processEvents()
+    assert opened == [1] and not c.hands_free       # typed, so no mic for the card
+    c.card.cancel()
+    wait_until(qapp, lambda: not c.busy)
+    c.shutdown()
+
+
+def test_without_ask_on_pressure_the_guardian_card_is_unchanged(qapp):
+    c = make_ctl()
+    c.sensor.age(300)
+    c.on_pressure(mocks.PRESSURE)
+    wait_until(qapp, lambda: c.card)
+    assert isinstance(c.card, GuardianCard) and c.prompt is None
+    c.card.cancel()
+    wait_until(qapp, lambda: not c.busy)
+    c.shutdown()

@@ -35,7 +35,7 @@ from shiboken6 import isValid
 from freezer import sessions
 from freezer.agent import FocusAgent, Outcome, Proposal
 from freezer.contracts import Actuator, PressureEvent
-from freezer.guardian import Guardian
+from freezer.guardian import Guardian, GuardianConfig
 from freezer.planner import DEFAULT_MODEL
 from freezer.watchdog import Heartbeat
 from freezer.voice import Command, HoldHotkey, PushToTalk, Speaker, listen_once, parse_command
@@ -50,6 +50,11 @@ from ui.stats import Stats, StatsCard
 from ui.voicebar import VoiceBar
 
 GUARDIAN_POLL_MS = 5000
+
+
+def spoken_gb(mb: float) -> str:
+    """For the voice: "1.4 gigabytes", "600 megabytes"."""
+    return f"{mb / 1024:.1f} gigabytes" if mb >= 1024 else f"{round(mb, -1):.0f} megabytes"
 
 log = logging.getLogger(__name__)
 
@@ -107,13 +112,22 @@ class Controller(QObject):
     _show_card = Signal(object, object)
     _show_question = Signal(str, object)
     _voice_text = Signal(str, float)
+    _listen_now = Signal(str)             # "prompt" or "card": the spoken question has ended
 
     def __init__(self, sensor, policy, actuator: Actuator, *, client=None, model: str = DEFAULT_MODEL,
-                 speak: Callable[[str], None] = lambda _t: None,
+                 speak: Callable[..., None] = lambda _t, then=None: then() if then else None,
+                 listen: Callable[[], None] = lambda: None,
+                 ask_on_pressure: bool = False,
                  on_guardian_dismiss: Callable[[], None] = lambda: None,
                  read_ram: Callable[[], Ram] = read_ram):
+        """speak(text, then) says a line and calls then() once it has been said. listen()
+        opens the mic for one hands-free answer. ask_on_pressure: when RAM is high and no
+        task is known, ask "What are you focusing on?" instead of offering idle apps."""
         super().__init__()
         self.sensor, self.actuator, self.speak = sensor, actuator, speak
+        self.listen, self.ask_on_pressure = listen, ask_on_pressure
+        self.hands_free = False           # the user is talking, not typing: answer and listen again
+        self._task: str | None = None     # what the user last said they are working on
         self.read_ram = read_ram
         self.card_center = QPointF()      # where the freeze effect starts
         self.on_guardian_dismiss = on_guardian_dismiss
@@ -131,7 +145,8 @@ class Controller(QObject):
         self._plan_answered: float | None = None
         self._show_card.connect(self._open_card)
         self._show_question.connect(self._open_question)
-        self._voice_text.connect(self.handle_transcript)
+        self._voice_text.connect(self._heard)
+        self._listen_now.connect(self._listen_if_open)
 
     # ---- intents -----------------------------------------------------------
 
@@ -139,11 +154,18 @@ class Controller(QObject):
     def busy(self) -> bool:
         return self._job is not None and not self._job.done()
 
+    @property
+    def prompt_open(self) -> bool:
+        """A prompt closes itself on Go, so self.prompt can outlive it."""
+        return self.prompt is not None and isValid(self.prompt) and self.prompt.isVisible()
+
     def focus(self, task: str | None, session: str | None = None) -> None:
         if self.busy:
             self.status.emit("Still working on the last request.")
             return
         self._close_prompt()
+        if task and task.strip():
+            self._task = task.strip()
         self._abort.clear()
         self._plan_started = self._plan_answered = None
         self.status.emit("Reading your open apps...")
@@ -151,6 +173,8 @@ class Controller(QObject):
         self._job = self._worker.submit(self._guarded, self._run_focus, task, session)
 
     def done(self) -> None:
+        self._task = None
+        self._close_prompt()
         self._cancel_card()
         self.status.emit("Restoring your apps...")
         self._job = self._worker.submit(self._guarded, self._run_done)
@@ -158,6 +182,8 @@ class Controller(QObject):
     def panic(self) -> None:
         """Thaw now, whatever the worker is doing. Queue a second pass in case
         a freeze was mid-flight when this ran."""
+        self._task = None
+        self._close_prompt()
         self._cancel_card()
         restored = self._thaw_all()
         self._worker.submit(self._guarded, self._thaw_all)
@@ -166,9 +192,12 @@ class Controller(QObject):
 
     def on_pressure(self, event: PressureEvent) -> None:
         """From A's guardian. One card at a time, never a storm."""
-        if self.busy or self.card:
+        if self.busy or self.card or self.prompt_open:
             return
         self._ram_pct = event.ram_pct
+        if self.ask_on_pressure and not (self._task or self.agent.session_name):
+            self._ask_focus(event)
+            return
         self._abort.clear()
         self._plan_started = self._plan_answered = None
         self._job = self._worker.submit(self._guarded, self._run_pressure, event)
@@ -186,12 +215,25 @@ class Controller(QObject):
         """Any thread."""
         self._voice_text.emit(text, usd)
 
+    def _heard(self, text: str, usd: float) -> None:
+        self.hands_free = True            # spoken, so the reply is spoken and the mic reopens
+        self.handle_transcript(text, usd)
+
+    def say(self, text: str, listen_for: str | None = None) -> None:
+        """Speak; in a hands-free conversation, open the mic once the line is said."""
+        if listen_for and self.hands_free:
+            self.speak(text, lambda: self._listen_now.emit(listen_for))
+        else:
+            self.speak(text)
+
     def handle_transcript(self, text: str, usd: float = 0.0) -> None:
         self.stats.usd += usd
         self.transcript.emit(text)
         cmd: Command | None = parse_command(text)
         if cmd is None:
             self.status.emit("Didn't catch that.")
+        elif cmd.kind == "cancel" and self.prompt_open and not self.card:
+            self.prompt.cancel()
         elif cmd.kind == "done":
             self.done()
         elif cmd.kind == "confirm" or cmd.kind == "cancel":
@@ -246,8 +288,8 @@ class Controller(QObject):
         out = self.agent.focus(task, session)
         self._account(out)
         if out.question:
-            self.speak(out.question)
-            self._show_question.emit(out.question, session)
+            self._show_question.emit(out.question, session)   # open before the mic can answer it
+            self.say(out.question, "prompt")
             self.status.emit("One question first.")
             return
         self._save_rules(out)
@@ -305,6 +347,8 @@ class Controller(QObject):
     def _report(self, out: Outcome) -> None:
         if out.declined:
             self.status.emit("Cancelled, nothing frozen.")
+            self.say("Okay, nothing frozen.")
+            self.hands_free = False
         elif out.frozen:
             mb = sum(e.freed_mb for e in out.frozen)
             text = f"Froze {len(out.frozen)} apps, ~{gb(mb)} freed."
@@ -313,7 +357,10 @@ class Controller(QObject):
             if out.skipped:
                 text += " Left alone: " + ", ".join(f"{b.app_id} ({rule_words(b.rule)})" for b in out.skipped) + "."
             self.status.emit(text)
-            self.speak(f"Froze {len(out.frozen)} apps.")
+            n = len(out.frozen)
+            self.speak(f"Done. I froze {n} {'app' if n == 1 else 'apps'} and freed about {spoken_gb(mb)}. "
+                       "Say I'm done when you finish.")
+            self.hands_free = False
         elif out.failed:
             self.status.emit(f"Could not freeze: {', '.join(out.failed)}.")
         elif out.note:
@@ -381,19 +428,59 @@ class Controller(QObject):
             self.speak(card.text)
         else:
             open_consent()
-            self.speak(f"Freeze {len(proposal.to_freeze)} apps?")
+            n = len(proposal.to_freeze)
+            self.say(f"I can freeze {n} {'app' if n == 1 else 'apps'} you don't need for this. "
+                     "Freeze them?", "card")
 
     def _open_question(self, question: str, session) -> None:
         self._open_prompt(question, lambda text: self.focus(text, session))
 
     def open_focus_prompt(self) -> None:
+        self.hands_free = False
         self._open_prompt("What are you working on?", self.say_task, "fixing the login bug")
 
-    def _open_prompt(self, question: str, then: Callable[[str], None], placeholder: str = "") -> None:
+    def _ask_focus(self, event: PressureEvent) -> None:
+        """RAM is high and we don't know the task: ask out loud, and listen for the answer
+        without waiting for the voice key. The answer takes the normal focus path: the
+        planner, the consent card, then the freeze. Cancel starts the guardian cooldown."""
+        pct = round(event.ram_pct)
+        self.hands_free = True
+        self._open_prompt("What are you focusing on?", self.say_task, "writing my thesis",
+                          subtitle=f"Memory is at {pct}%. Tell me, and I'll freeze what you don't need.",
+                          on_cancel=self._pressure_declined)
+        self.status.emit(f"RAM {pct}%. What are you focusing on?")
+        self.say(f"Your memory is at {pct} percent. What are you focusing on?", "prompt")
+
+    def _pressure_declined(self) -> None:
+        self.hands_free = False
+        self.on_guardian_dismiss()
+        self.status.emit("Dismissed. No new card for 10 minutes.")
+
+    def _listen_if_open(self, what: str) -> None:
+        """GUI thread, after the question was spoken. Skip if it was answered or closed."""
+        if (what == "prompt" and self.prompt_open and not self.card) or (what == "card" and self.card):
+            self.listen()
+
+    def _open_prompt(self, question: str, then: Callable[[str], None], placeholder: str = "",
+                     subtitle: str = "", on_cancel: Callable[[], None] | None = None) -> None:
         self._close_prompt()
-        self.prompt = PromptCard(question, placeholder)
-        self.prompt.submitted.connect(then)
-        self.prompt.present()
+        prompt = PromptCard(question, placeholder, subtitle)
+
+        def typed(text: str) -> None:
+            self.hands_free = False
+            then(text)
+
+        prompt.submitted.connect(typed)
+        prompt.cancelled.connect(self._prompt_cancelled)
+        if on_cancel:
+            prompt.cancelled.connect(on_cancel)
+        self.listening.connect(prompt.set_listening)
+        self.transcript.connect(prompt.show_heard)
+        self.prompt = prompt
+        prompt.present()
+
+    def _prompt_cancelled(self) -> None:
+        self.prompt = None
 
     def _close_prompt(self) -> None:
         if self.prompt:
@@ -565,9 +652,12 @@ def main() -> int:
     actuator = parts["actuator"]
     seed_demo_sessions(args.live, args.live_planner)
     actuator.thaw_all()  # contract: recover anything a crashed run left frozen
+    guardian_config = GuardianConfig(
+        hi_pct=float(os.environ.get("FF_GUARDIAN_PCT", GuardianConfig.hi_pct)),
+        sustain_s=float(os.environ.get("FF_GUARDIAN_SUSTAIN_S", GuardianConfig.sustain_s)))
     if args.live:
         ram = read_ram
-        guardian = Guardian()
+        guardian = Guardian(config=guardian_config)
         heartbeat = Heartbeat()
         heartbeat.start()
         app.aboutToQuit.connect(heartbeat.stop)
@@ -577,8 +667,10 @@ def main() -> int:
         parts["policy"].watchdog_pid = watchdog.pid
     else:
         ram = lambda: mocks.ram_for(actuator)
-        guardian = Guardian(ram_pct=lambda: ram().pct)
-    ctl = Controller(**parts, speak=speaker.say, read_ram=ram, on_guardian_dismiss=guardian.dismissed)
+        guardian = Guardian(ram_pct=lambda: ram().pct, config=guardian_config)
+    ctl = Controller(**parts, speak=speaker.say, read_ram=ram, on_guardian_dismiss=guardian.dismissed,
+                     listen=lambda: listen_hands_free(),   # defined below, once the mic exists
+                     ask_on_pressure=os.environ.get("FF_ASK_ON_PRESSURE", "1") != "0")
     if isinstance(parts["policy"], SessionPolicy):
         parts["policy"].active = lambda: ctl.agent.session_name
 
@@ -691,6 +783,23 @@ def main() -> int:
         if not ptt.api_key:   # no key: the hotkey plays the demo's next line
             ctl.voice_heard(listen_once(scripted))
             scripted.append(scripted.pop(0))
+
+    def listen_hands_free() -> None:
+        """The agent just asked something out loud: open the mic, no key needed. It
+        closes itself after the answer. No key: the card's text box is the answer."""
+        if not ptt.api_key:
+            ctl.status.emit("Type your answer (voice needs MODEL_API_KEY).")
+            return
+        if ptt.active:
+            return   # the voice key is already held
+        ctl.listening.emit(True)
+        try:
+            opened = ptt.listen(on_end=lambda: ctl.listening.emit(False))
+        except Exception:  # noqa: BLE001 - typing still works
+            log.exception("hands-free listening failed")
+            opened = False
+        if not opened:
+            ctl.listening.emit(False)
 
     hotkey = HoldHotkey(press, release, ctl.status.emit, on_ready=ctl.hotkey_ready.emit)
     hotkey.start()

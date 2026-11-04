@@ -308,3 +308,66 @@ def test_a_loud_hold_with_no_words_is_still_a_transcript(monkeypatch):
     ptt = voice.PushToTalk(lambda t, _u: heard.append(t), lambda _m: pytest.fail("no hint"), api_key="k")
     ptt._run(queue.Queue(), {"peak": 3000.0})
     assert heard == [""]
+
+
+# ---- Hands-free turn and speech callbacks ---------------------------------
+
+class _FakeStream:
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def _fake_mic(monkeypatch):
+    ptt = voice.PushToTalk(lambda *_a: None, lambda _m: None, api_key="k")
+
+    def press():
+        ptt._frames, ptt._stream = queue.Queue(), _FakeStream()
+
+    monkeypatch.setattr(ptt, "press", press)
+    return ptt
+
+
+def test_hands_free_turn_closes_after_a_pause_following_speech(monkeypatch):
+    import threading
+    import time
+
+    ptt = _fake_mic(monkeypatch)
+    ended = threading.Event()
+    assert ptt.listen(ended.set, silence_s=0.15, wait_s=5, max_s=5)
+    assert ptt.active
+    ptt._vad(voice.SPEECH_RMS + 1)                  # talking
+    time.sleep(0.3)
+    assert ptt.active                               # no pause yet: still listening
+    ptt._vad(10)                                    # quiet from now on
+    assert ended.wait(2) and not ptt.active
+    assert ptt._no_speech is None and ptt._vad is None
+
+
+def test_hands_free_turn_with_no_answer_says_so(monkeypatch):
+    import threading
+
+    ptt = _fake_mic(monkeypatch)
+    ended = threading.Event()
+    assert ptt.listen(ended.set, wait_s=0.1, max_s=5)
+    frames = ptt._frames
+    assert ended.wait(2) and not ptt.active
+    assert ptt._no_speech is frames
+
+
+def test_hands_free_turn_reports_no_mic(monkeypatch):
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    ptt = voice.PushToTalk(lambda *_a: None, lambda _m: None, api_key=None)
+    assert ptt.listen() is False and ptt._vad is None
+
+
+def test_speaker_runs_the_callback_even_without_a_speech_engine(monkeypatch):
+    import sys
+    import threading
+
+    monkeypatch.setitem(sys.modules, "pyttsx3", None)   # import fails: no TTS
+    done = threading.Event()
+    voice.Speaker().say("hello", then=done.set)
+    assert done.wait(2)

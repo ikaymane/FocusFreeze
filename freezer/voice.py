@@ -2,7 +2,8 @@
 
     python -m freezer.voice      # hold Ctrl+Alt+Space, speak, see the parsed command
 
-The mic is open only while the hotkey is held, and nothing else leaves the
+The mic is open only while the hotkey is held, or for one answer right after
+Focus Freeze asks a question out loud (listen()), and nothing else leaves the
 machine. The transcript is user input, but parse_command() still only picks
 what to do: a focus task goes to the planner, then the consent card.
 
@@ -36,6 +37,13 @@ USD_PER_MINUTE = 0.003
 NOT_CAUGHT = "Didn't catch that. Hold the voice key and try again."
 SILENT_RMS = 400             # a hold that never got this loud heard no one (dead jack, muted mic)
 QUIET_FACTOR = 0.25          # Windows' default mic loses only if this much quieter than another
+# Hands-free turn (the agent asked a question, no key is held): the mic closes after a
+# pause that follows speech, after WAIT_S of nobody talking, or after MAX_S in all.
+SPEECH_RMS = 600
+HANDS_FREE_SILENCE_S = 1.0
+HANDS_FREE_WAIT_S = 7.0
+HANDS_FREE_MAX_S = 15.0
+NO_ANSWER = "No answer heard. Type it, or hold the voice key and speak."
 
 
 # ---- Microphone choice -----------------------------------------------------
@@ -252,6 +260,8 @@ class PushToTalk:
         self._started = 0.0
         self.device: int | None = None   # None: Windows' default until choose_mic() runs
         self.mic_name = "default microphone"
+        self._vad: Callable[[float], None] | None = None   # hands-free: told each frame's loudness
+        self._no_speech: queue.Queue | None = None         # a hands-free turn nobody answered
 
     @property
     def active(self) -> bool:
@@ -311,6 +321,8 @@ class PushToTalk:
                 hold["peak"] = max(hold["peak"], rms)
                 if self.on_level:
                     self.on_level(min(rms / 6000, 1.0))
+                if vad := self._vad:
+                    vad(rms)
 
             try:
                 stream = sd.RawInputStream(device=self.device, samplerate=SAMPLE_RATE, channels=1,
@@ -336,16 +348,64 @@ class PushToTalk:
             finally:
                 frames.put(None)   # always: without it the transcription waits for audio forever
 
+    def listen(self, on_end: Callable[[], None] | None = None, *, silence_s: float = HANDS_FREE_SILENCE_S,
+               wait_s: float = HANDS_FREE_WAIT_S, max_s: float = HANDS_FREE_MAX_S) -> bool:
+        """Hands-free turn: open the mic now, no key held, and close it on its own once
+        the user stops talking. False if the mic did not open. on_end runs once the mic
+        is closed (any thread). Holding the voice key meanwhile ends this turn early."""
+        state = {"spoke": False, "quiet_since": 0.0}
+
+        def hear(rms: float) -> None:    # audio thread
+            if rms >= SPEECH_RMS:
+                state["spoke"], state["quiet_since"] = True, 0.0
+            elif state["spoke"] and not state["quiet_since"]:
+                state["quiet_since"] = time.monotonic()
+
+        self._vad = hear
+        self.press()
+        frames = self._frames
+        if frames is None:
+            self._vad = None
+            return False
+        started = time.monotonic()
+
+        def watch() -> None:
+            try:
+                while self._frames is frames:
+                    now = time.monotonic()
+                    if state["quiet_since"] and now - state["quiet_since"] >= silence_s:
+                        break
+                    if not state["spoke"] and now - started >= wait_s:
+                        self._no_speech = frames
+                        break
+                    if now - started >= max_s:
+                        break
+                    time.sleep(0.05)
+                if self._frames is frames:
+                    self.release()
+            finally:
+                if self._vad is hear:
+                    self._vad = None
+                if on_end:
+                    on_end()
+
+        threading.Thread(target=watch, daemon=True, name="ff-listen").start()
+        return True
+
     def _expire(self, frames: queue.Queue) -> None:
         if self._frames is frames:
             self.release()
 
     def _run(self, frames: queue.Queue, hold: dict | None = None) -> None:
+        unanswered = lambda: self._no_speech is frames  # noqa: E731
         silent = lambda: hold is not None and hold["peak"] < SILENT_RMS  # noqa: E731
         try:
             text, audio_ms = asyncio.run(transcribe(frames, self.api_key, self.on_partial))
         except VoiceError as e:
             self.release()
+            if unanswered() and str(e) == NOT_CAUGHT:
+                self.on_error(NO_ANSWER)
+                return
             self.on_error(self._silence_hint() if silent() and str(e) == NOT_CAUGHT else str(e))
         except Exception:  # noqa: BLE001 - a voice bug must not end in silence
             log.exception("transcription failed")
@@ -353,7 +413,9 @@ class PushToTalk:
             self.on_error(NOT_CAUGHT)
         else:
             self.release()  # the server can finish first; the mic must not outlive the stream
-            if not text.strip() and silent():
+            if not text.strip() and unanswered():
+                self.on_error(NO_ANSWER)
+            elif not text.strip() and silent():
                 self.on_error(self._silence_hint())
             else:
                 self.on_transcript(text, audio_ms / 60_000 * USD_PER_MINUTE)
@@ -495,25 +557,35 @@ class Speaker:
     """Windows SAPI via pyttsx3 (Meta has no TTS). Text on screen is the fallback."""
 
     def __init__(self) -> None:
-        self._queue: queue.Queue[str] = queue.Queue()
+        self._queue: queue.Queue[tuple[str, Callable[[], None] | None]] = queue.Queue()
         threading.Thread(target=self._loop, daemon=True, name="ff-tts").start()
 
-    def say(self, text: str) -> None:
-        self._queue.put(text)
+    def say(self, text: str, then: Callable[[], None] | None = None) -> None:
+        """then() runs once the line has been spoken, so a mic opened by it never hears
+        our own voice. It runs even when there is no speech engine."""
+        self._queue.put((text, then))
 
     def _loop(self) -> None:
         try:
             import pyttsx3
             engine = pyttsx3.init()
-        except Exception:
-            return
+        except Exception:  # noqa: BLE001 - no TTS: the text on screen is enough
+            log.warning("no speech engine; replies are shown, not spoken", exc_info=True)
+            engine = None
         while True:
-            text = self._queue.get()
-            try:
-                engine.say(text)
-                engine.runAndWait()
-            except Exception:
-                return
+            text, then = self._queue.get()
+            if engine is not None:
+                try:
+                    engine.say(text)
+                    engine.runAndWait()
+                except Exception:  # noqa: BLE001
+                    log.exception("speech failed; replies are shown, not spoken")
+                    engine = None
+            if then is not None:
+                try:
+                    then()
+                except Exception:  # noqa: BLE001 - a bad callback must not end speech
+                    log.exception("after-speech callback failed")
 
 
 def _main() -> None:
