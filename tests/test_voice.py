@@ -364,10 +364,22 @@ def test_hands_free_turn_reports_no_mic(monkeypatch):
 
 
 def test_speaker_runs_the_callback_even_without_a_speech_engine(monkeypatch):
-    import sys
     import threading
 
-    monkeypatch.setitem(sys.modules, "pyttsx3", None)   # import fails: no TTS
+    monkeypatch.setattr(voice.Speaker, "_engine", staticmethod(lambda: None))   # no TTS at all
     done = threading.Event()
     voice.Speaker().say("hello", then=done.set)
     assert done.wait(2)
+
+
+def test_speaker_speaks_every_line_not_just_the_first(monkeypatch):
+    import threading
+
+    spoken = []
+    monkeypatch.setattr(voice.Speaker, "_engine", staticmethod(lambda: spoken.append))
+    done = threading.Event()
+    sp = voice.Speaker()
+    sp.say("one")
+    sp.say("two")
+    sp.say("three", then=done.set)
+    assert done.wait(2) and spoken == ["one", "two", "three"]
