@@ -487,7 +487,42 @@ def results() -> str:
                "Focus Freeze results", "".join(css), body, defs)
 
 
-PICTURES = {"banner.svg": hero, "flow.svg": pipeline, "numbers.svg": results, "team-cards.svg": team}
+# ---------------------------------------------------------------- section divider
+def divider() -> str:
+    """A frost line between README sections: transparent, so it works on light and dark GitHub."""
+    h, cx = 44, W / 2
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {h}" width="{W}" height="{h}" aria-hidden="true">
+<defs>
+  <linearGradient id="line" x1="0" x2="1"><stop offset="0" stop-color="{ICE}" stop-opacity="0"/><stop offset=".5" stop-color="{ICE}" stop-opacity=".75"/><stop offset="1" stop-color="{ICE}" stop-opacity="0"/></linearGradient>
+  <linearGradient id="pulse" x1="0" x2="1"><stop offset="0" stop-color="{ICE2}" stop-opacity="0"/><stop offset=".5" stop-color="{ICE2}"/><stop offset="1" stop-color="{ICE2}" stop-opacity="0"/></linearGradient>
+  <clipPath id="lane"><rect x="0" y="{h / 2 - 2}" width="{W}" height="4"/></clipPath>
+  {FLAKE}
+</defs>
+<style>
+  .pulse {{ animation: pulse 6s {EASE_IO} infinite; }}
+  .pulse2 {{ animation: pulse2 6s {EASE_IO} infinite; }}
+  @keyframes pulse  {{ 0% {{ transform: translateX(0); }} 45%,100% {{ transform: translateX({cx - 30}px); }} }}
+  @keyframes pulse2 {{ 0% {{ transform: translateX(0); }} 45%,100% {{ transform: translateX(-{cx - 30}px); }} }}
+  .spin {{ transform-box: fill-box; transform-origin: center; animation: spin 24s linear infinite; }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  .glow {{ transform-box: fill-box; transform-origin: center; animation: glow 3s {EASE_IO} infinite alternate; }}
+  @keyframes glow {{ from {{ opacity: .15; transform: scale(.85); }} to {{ opacity: .4; transform: scale(1.15); }} }}
+  @media (prefers-reduced-motion: reduce) {{ * {{ animation: none !important; }} }}
+</style>
+<rect x="0" y="{h / 2 - .75}" width="{cx - 34}" height="1.5" fill="url(#line)"/>
+<rect x="{cx + 34}" y="{h / 2 - .75}" width="{cx - 34}" height="1.5" fill="url(#line)"/>
+<g clip-path="url(#lane)">
+  <rect class="pulse" x="-120" y="{h / 2 - 1.5}" width="120" height="3" fill="url(#pulse)"/>
+  <rect class="pulse2" x="{W}" y="{h / 2 - 1.5}" width="120" height="3" fill="url(#pulse)"/>
+</g>
+<circle class="glow" cx="{cx}" cy="{h / 2}" r="18" fill="{ICE}"/>
+<g transform="translate({cx} {h / 2})"><use class="spin" href="#flake" stroke="{ICE}"/></g>
+</svg>
+"""
+
+
+PICTURES = {
+    "divider.svg": divider,"banner.svg": hero, "flow.svg": pipeline, "numbers.svg": results, "team-cards.svg": team}
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
