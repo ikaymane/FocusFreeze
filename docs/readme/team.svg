@@ -1,115 +1,120 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 330" width="1200" height="330" role="img" aria-label="Team: Nassime Gharib (UI, voice, demo), Aymane Idrissi Khamlichi (AI, sensor, policy), Yassine Belaidi (systems: actuator, ledger, watchdog)">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 530" width="1200" height="530" role="img" aria-label="Team: Nassime Gharib (Ui, Voice, Demo), Aymane Idrissi Khamlichi (Ai, Sensor), Yahya Dadsi (Policy, Security), Yassine Belaidi (Systems)">
   <title>The Focus Freeze team</title>
   <defs>
-    <linearGradient id="a1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8ED8EE"/><stop offset="1" stop-color="#4A7BD0"/></linearGradient>
-    <linearGradient id="a2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B4E7F5"/><stop offset="1" stop-color="#6FD08C"/></linearGradient>
+    <linearGradient id="a0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8ED8EE"/><stop offset="1" stop-color="#4A7BD0"/></linearGradient>
+    <linearGradient id="a1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B4E7F5"/><stop offset="1" stop-color="#6FD08C"/></linearGradient>
+    <linearGradient id="a2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F5E3A0"/><stop offset="1" stop-color="#E9C04C"/></linearGradient>
     <linearGradient id="a3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F0B37E"/><stop offset="1" stop-color="#EF6F5E"/></linearGradient>
-    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#8ED8EE" stop-opacity="0"/><stop offset=".5" stop-color="#8ED8EE" stop-opacity=".9"/><stop offset="1" stop-color="#8ED8EE" stop-opacity="0"/>
-    </linearGradient>
-    <clipPath id="c1"><rect width="352" height="250" rx="16"/></clipPath>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8ED8EE" stop-opacity="0"/><stop offset=".5" stop-color="#8ED8EE" stop-opacity=".9"/><stop offset="1" stop-color="#8ED8EE" stop-opacity="0"/></linearGradient>
+    <clipPath id="cc"><rect width="551" height="200" rx="16"/></clipPath>
   </defs>
   <style>
     text { font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
-    .name { fill: #F1F5F7; font-size: 21px; font-weight: 700; }
-    .role { font-size: 13px; font-weight: 700; letter-spacing: 1.6px; }
+    .name { fill: #F1F5F7; font-weight: 700; }
+    .role { font-size: 14px; font-weight: 700; letter-spacing: 1.6px; }
+    .sub  { fill: #A5B4BD; font-size: 16px; }
     .chip { fill: #18232B; stroke: #31404A; }
-    .ct   { fill: #A5B4BD; font-size: 13.5px; }
-    .ini  { fill: #0C2430; font-size: 26px; font-weight: 800; }
-
-    .card { animation: rise 9s infinite cubic-bezier(.2,.8,.2,1); opacity: 0; }
-    .k2 { animation-delay: .25s; } .k3 { animation-delay: .5s; }
-    @keyframes rise { 0% { opacity: 0; transform: translateY(26px); } 8%,90% { opacity: 1; transform: translateY(0); } 97%,100% { opacity: 0; transform: translateY(0); } }
-
+    .ct   { fill: #C4D0D6; font-size: 15px; }
+    .ini  { fill: #0C2430; font-size: 30px; font-weight: 800; }
+    .card { opacity: 0; animation: rise 10s infinite cubic-bezier(.2,.8,.2,1); }
+    @keyframes rise { 0% { opacity: 0; transform: translateY(26px); } 7%,90% { opacity: 1; transform: translateY(0); } 97%,100% { opacity: 0; transform: translateY(0); } }
     .ring { fill: none; stroke-width: 2.5; stroke-dasharray: 60 140; transform-box: fill-box; transform-origin: center; animation: spin 6s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-
-    .lift { animation: lift 9s infinite ease-in-out; }
-    .l1 { animation-delay: 1.4s; } .l2 { animation-delay: 3.4s; } .l3 { animation-delay: 5.4s; }
-    @keyframes lift { 0%,100% { stroke: #31404A; } 8%,20% { stroke: #8ED8EE; } 30% { stroke: #31404A; } }
-
-    .scan { animation: scan 9s infinite; opacity: 0; }
-    .sc1 { animation-delay: 1.4s; } .sc2 { animation-delay: 3.4s; } .sc3 { animation-delay: 5.4s; }
-    @keyframes scan { 0% { opacity: 0; transform: translateX(-200px); } 3% { opacity: 1; } 14% { opacity: 1; transform: translateX(380px); } 15%,100% { opacity: 0; transform: translateX(380px); } }
-
-    .chipin { opacity: 0; animation: chip 9s infinite; }
-    .p1 { animation-delay: .6s; } .p2 { animation-delay: .75s; } .p3 { animation-delay: .9s; }
-    .p4 { animation-delay: .85s; } .p5 { animation-delay: 1s; } .p6 { animation-delay: 1.15s; }
-    .p7 { animation-delay: 1.1s; } .p8 { animation-delay: 1.25s; } .p9 { animation-delay: 1.4s; }
-    @keyframes chip { 0%,4% { opacity: 0; } 9%,90% { opacity: 1; } 97%,100% { opacity: 0; } }
+    .lift { animation: lift 10s infinite ease-in-out; }
+    @keyframes lift { 0%,100% { stroke: #31404A; } 6%,15% { stroke: #8ED8EE; } 22% { stroke: #31404A; } }
+    .scan { opacity: 0; animation: scan 10s infinite; }
+    @keyframes scan { 0% { opacity: 0; transform: translateX(-160px); } 2% { opacity: 1; } 12% { opacity: 1; transform: translateX(571px); } 13%,100% { opacity: 0; transform: translateX(571px); } }
+    .chipin { opacity: 0; animation: chip 10s infinite; }
+    @keyframes chip { 0%,4% { opacity: 0; } 8%,90% { opacity: 1; } 97%,100% { opacity: 0; } }
   </style>
 
-  <rect width="1200" height="330" rx="22" fill="#121C23"/>
-  <rect x=".5" y=".5" width="1199" height="329" rx="22" fill="none" stroke="#31404A"/>
-  <text x="40" y="46" fill="#F1F5F7" font-size="20" font-weight="700">The team</text>
-  <text x="140" y="46" fill="#A5B4BD" font-size="14">who built what</text>
+  <rect width="1200" height="530" rx="22" fill="#121C23"/>
+  <rect x=".5" y=".5" width="1199" height="529" rx="22" fill="none" stroke="#31404A"/>
+  <text x="40" y="48" fill="#F1F5F7" font-size="20" font-weight="700">The team</text>
+  <text x="138" y="48" fill="#A5B4BD" font-size="14">who built what</text>
 
-  <!-- card 1: Nassime -->
-  <g transform="translate(40 66)">
-    <g class="card">
-      <rect width="352" height="236" rx="16" fill="#212E37"/>
-      <rect class="lift l1" width="352" height="236" rx="16" fill="none" stroke="#31404A" stroke-width="1.5"/>
-      <g clip-path="url(#c1)"><rect class="scan sc1" x="0" y="0" width="140" height="3" fill="url(#edge)"/></g>
-      <g transform="translate(58 62)">
-        <circle r="34" fill="url(#a1)"/>
-        <circle class="ring" r="41" stroke="#8ED8EE"/>
-        <text class="ini" y="9" text-anchor="middle">NG</text>
+  <!-- Nassime Gharib -->
+  <g transform="translate(40 72)">
+    <g class="card" style="animation-delay:0.00s">
+      <rect width="551" height="200" rx="16" fill="#212E37"/>
+      <rect class="lift" style="animation-delay:1.2s" width="551" height="200" rx="16" fill="none" stroke="#31404A" stroke-width="1.5"/>
+      <g clip-path="url(#cc)"><rect class="scan" style="animation-delay:1.2s" width="140" height="3" fill="url(#edge)"/></g>
+      <g transform="translate(76 78)">
+        <circle r="44" fill="url(#a0)"/>
+        <circle class="ring" r="52" stroke="#8ED8EE" style="animation-delay:-0.0s"/>
+        <text class="ini" y="11" text-anchor="middle">NG</text>
       </g>
-      <text class="role" x="112" y="50" fill="#8ED8EE">UI · VOICE · DEMO</text>
-      <text class="name" x="112" y="78">Nassime Gharib</text>
-      <text class="ct" x="112" y="100">What you see and say</text>
-      <g transform="translate(24 128)">
-        <g class="chipin p1"><rect class="chip" width="148" height="30" rx="15"/><text class="ct" x="74" y="20" text-anchor="middle">tray app &amp; gauge</text></g>
-        <g class="chipin p2" transform="translate(158 0)"><rect class="chip" width="146" height="30" rx="15"/><text class="ct" x="73" y="20" text-anchor="middle">consent card</text></g>
-        <g class="chipin p3" transform="translate(0 40)"><rect class="chip" width="170" height="30" rx="15"/><text class="ct" x="85" y="20" text-anchor="middle">push-to-talk voice</text></g>
-        <g class="chipin p3" transform="translate(180 40)"><rect class="chip" width="124" height="30" rx="15"/><text class="ct" x="62" y="20" text-anchor="middle">demo video</text></g>
-      </g>
+      <text class="role" x="150" y="56" fill="#8ED8EE">UI · VOICE · DEMO</text>
+      <text class="name" x="150" y="88" font-size="24">Nassime Gharib</text>
+      <text class="sub" x="150" y="114">What you see and say</text>
+      <g class="chipin" style="animation-delay:0.50s" transform="translate(24 150)"><rect class="chip" width="120" height="32" rx="16"/><text class="ct" x="60" y="21.5" text-anchor="middle">tray &amp; gauge</text></g>
+      <g class="chipin" style="animation-delay:0.60s" transform="translate(152 150)"><rect class="chip" width="120" height="32" rx="16"/><text class="ct" x="60" y="21.5" text-anchor="middle">consent card</text></g>
+      <g class="chipin" style="animation-delay:0.70s" transform="translate(280 150)"><rect class="chip" width="166" height="32" rx="16"/><text class="ct" x="83" y="21.5" text-anchor="middle">push-to-talk voice</text></g>
+      <g class="chipin" style="animation-delay:0.80s" transform="translate(454 150)"><rect class="chip" width="65" height="32" rx="16"/><text class="ct" x="32" y="21.5" text-anchor="middle">video</text></g>
     </g>
   </g>
 
-  <!-- card 2: Aymane -->
-  <g transform="translate(424 66)">
-    <g class="card k2">
-      <rect width="352" height="236" rx="16" fill="#212E37"/>
-      <rect class="lift l2" width="352" height="236" rx="16" fill="none" stroke="#31404A" stroke-width="1.5"/>
-      <g clip-path="url(#c1)"><rect class="scan sc2" x="0" y="0" width="140" height="3" fill="url(#edge)"/></g>
-      <g transform="translate(58 62)">
-        <circle r="34" fill="url(#a2)"/>
-        <circle class="ring" r="41" stroke="#6FD08C" style="animation-delay:-2s"/>
-        <text class="ini" y="9" text-anchor="middle">AK</text>
+  <!-- Aymane Idrissi Khamlichi -->
+  <g transform="translate(609 72)">
+    <g class="card" style="animation-delay:0.22s">
+      <rect width="551" height="200" rx="16" fill="#212E37"/>
+      <rect class="lift" style="animation-delay:2.8s" width="551" height="200" rx="16" fill="none" stroke="#31404A" stroke-width="1.5"/>
+      <g clip-path="url(#cc)"><rect class="scan" style="animation-delay:2.8s" width="140" height="3" fill="url(#edge)"/></g>
+      <g transform="translate(76 78)">
+        <circle r="44" fill="url(#a1)"/>
+        <circle class="ring" r="52" stroke="#6FD08C" style="animation-delay:-1.5s"/>
+        <text class="ini" y="11" text-anchor="middle">AK</text>
       </g>
-      <text class="role" x="112" y="50" fill="#6FD08C">AI · SENSOR · POLICY</text>
-      <text class="name" x="112" y="78">Aymane Idrissi</text>
-      <text class="name" x="112" y="102" style="font-size:17px;fill:#A5B4BD;font-weight:600">Khamlichi</text>
-      <g transform="translate(24 128)">
-        <g class="chipin p4"><rect class="chip" width="166" height="30" rx="15"/><text class="ct" x="83" y="20" text-anchor="middle">Muse Spark planner</text></g>
-        <g class="chipin p5" transform="translate(176 0)"><rect class="chip" width="128" height="30" rx="15"/><text class="ct" x="64" y="20" text-anchor="middle">deny list &amp; log</text></g>
-        <g class="chipin p6" transform="translate(0 40)"><rect class="chip" width="148" height="30" rx="15"/><text class="ct" x="74" y="20" text-anchor="middle">window sensor</text></g>
-        <g class="chipin p6" transform="translate(158 40)"><rect class="chip" width="146" height="30" rx="15"/><text class="ct" x="73" y="20" text-anchor="middle">red-team &amp; eval</text></g>
-      </g>
+      <text class="role" x="150" y="56" fill="#6FD08C">AI · SENSOR</text>
+      <text class="name" x="150" y="88" font-size="24">Aymane Idrissi Khamlichi</text>
+      <text class="sub" x="150" y="114">Which apps your task needs</text>
+      <g class="chipin" style="animation-delay:0.72s" transform="translate(24 150)"><rect class="chip" width="166" height="32" rx="16"/><text class="ct" x="83" y="21.5" text-anchor="middle">Muse Spark planner</text></g>
+      <g class="chipin" style="animation-delay:0.82s" transform="translate(198 150)"><rect class="chip" width="73" height="32" rx="16"/><text class="ct" x="36" y="21.5" text-anchor="middle">sensor</text></g>
+      <g class="chipin" style="animation-delay:0.92s" transform="translate(279 150)"><rect class="chip" width="57" height="32" rx="16"/><text class="ct" x="28" y="21.5" text-anchor="middle">eval</text></g>
+      <g class="chipin" style="animation-delay:1.02s" transform="translate(344 150)"><rect class="chip" width="88" height="32" rx="16"/><text class="ct" x="44" y="21.5" text-anchor="middle">sessions</text></g>
+      <g class="chipin" style="animation-delay:1.12s" transform="translate(440 150)"><rect class="chip" width="88" height="32" rx="16"/><text class="ct" x="44" y="21.5" text-anchor="middle">cost cap</text></g>
     </g>
   </g>
 
-  <!-- card 3: Yassine -->
-  <g transform="translate(808 66)">
-    <g class="card k3">
-      <rect width="352" height="236" rx="16" fill="#212E37"/>
-      <rect class="lift l3" width="352" height="236" rx="16" fill="none" stroke="#31404A" stroke-width="1.5"/>
-      <g clip-path="url(#c1)"><rect class="scan sc3" x="0" y="0" width="140" height="3" fill="url(#edge)"/></g>
-      <g transform="translate(58 62)">
-        <circle r="34" fill="url(#a3)"/>
-        <circle class="ring" r="41" stroke="#F0B37E" style="animation-delay:-4s"/>
-        <text class="ini" y="9" text-anchor="middle">YB</text>
+  <!-- Yahya Dadsi -->
+  <g transform="translate(40 290)">
+    <g class="card" style="animation-delay:0.44s">
+      <rect width="551" height="200" rx="16" fill="#212E37"/>
+      <rect class="lift" style="animation-delay:4.4s" width="551" height="200" rx="16" fill="none" stroke="#31404A" stroke-width="1.5"/>
+      <g clip-path="url(#cc)"><rect class="scan" style="animation-delay:4.4s" width="140" height="3" fill="url(#edge)"/></g>
+      <g transform="translate(76 78)">
+        <circle r="44" fill="url(#a2)"/>
+        <circle class="ring" r="52" stroke="#E9C04C" style="animation-delay:-3.0s"/>
+        <text class="ini" y="11" text-anchor="middle">YD</text>
       </g>
-      <text class="role" x="112" y="50" fill="#F0B37E">SYSTEMS</text>
-      <text class="name" x="112" y="78">Yassine Belaidi</text>
-      <text class="ct" x="112" y="100">What freezes and thaws</text>
-      <g transform="translate(24 128)">
-        <g class="chipin p7"><rect class="chip" width="198" height="30" rx="15"/><text class="ct" x="99" y="20" text-anchor="middle">actuator: suspend + page</text></g>
-        <g class="chipin p8" transform="translate(208 0)"><rect class="chip" width="96" height="30" rx="15"/><text class="ct" x="48" y="20" text-anchor="middle">ledger</text></g>
-        <g class="chipin p9" transform="translate(0 40)"><rect class="chip" width="120" height="30" rx="15"/><text class="ct" x="60" y="20" text-anchor="middle">watchdog</text></g>
-        <g class="chipin p9" transform="translate(130 40)"><rect class="chip" width="174" height="30" rx="15"/><text class="ct" x="87" y="20" text-anchor="middle">pressure guardian</text></g>
+      <text class="role" x="150" y="56" fill="#E9C04C">POLICY · SECURITY</text>
+      <text class="name" x="150" y="88" font-size="24">Yahya Dadsi</text>
+      <text class="sub" x="150" y="114">What must never freeze</text>
+      <g class="chipin" style="animation-delay:0.94s" transform="translate(24 150)"><rect class="chip" width="96" height="32" rx="16"/><text class="ct" x="48" y="21.5" text-anchor="middle">deny list</text></g>
+      <g class="chipin" style="animation-delay:1.04s" transform="translate(128 150)"><rect class="chip" width="120" height="32" rx="16"/><text class="ct" x="60" y="21.5" text-anchor="middle">threat model</text></g>
+      <g class="chipin" style="animation-delay:1.14s" transform="translate(256 150)"><rect class="chip" width="88" height="32" rx="16"/><text class="ct" x="44" y="21.5" text-anchor="middle">red-team</text></g>
+      <g class="chipin" style="animation-delay:1.24s" transform="translate(352 150)"><rect class="chip" width="96" height="32" rx="16"/><text class="ct" x="48" y="21.5" text-anchor="middle">audit log</text></g>
+    </g>
+  </g>
+
+  <!-- Yassine Belaidi -->
+  <g transform="translate(609 290)">
+    <g class="card" style="animation-delay:0.66s">
+      <rect width="551" height="200" rx="16" fill="#212E37"/>
+      <rect class="lift" style="animation-delay:6.0s" width="551" height="200" rx="16" fill="none" stroke="#31404A" stroke-width="1.5"/>
+      <g clip-path="url(#cc)"><rect class="scan" style="animation-delay:6.0s" width="140" height="3" fill="url(#edge)"/></g>
+      <g transform="translate(76 78)">
+        <circle r="44" fill="url(#a3)"/>
+        <circle class="ring" r="52" stroke="#F0B37E" style="animation-delay:-4.5s"/>
+        <text class="ini" y="11" text-anchor="middle">YB</text>
       </g>
+      <text class="role" x="150" y="56" fill="#F0B37E">SYSTEMS</text>
+      <text class="name" x="150" y="88" font-size="24">Yassine Belaidi</text>
+      <text class="sub" x="150" y="114">What freezes and thaws</text>
+      <g class="chipin" style="animation-delay:1.16s" transform="translate(24 150)"><rect class="chip" width="88" height="32" rx="16"/><text class="ct" x="44" y="21.5" text-anchor="middle">actuator</text></g>
+      <g class="chipin" style="animation-delay:1.26s" transform="translate(120 150)"><rect class="chip" width="73" height="32" rx="16"/><text class="ct" x="36" y="21.5" text-anchor="middle">ledger</text></g>
+      <g class="chipin" style="animation-delay:1.36s" transform="translate(201 150)"><rect class="chip" width="88" height="32" rx="16"/><text class="ct" x="44" y="21.5" text-anchor="middle">watchdog</text></g>
+      <g class="chipin" style="animation-delay:1.46s" transform="translate(297 150)"><rect class="chip" width="159" height="32" rx="16"/><text class="ct" x="80" y="21.5" text-anchor="middle">pressure guardian</text></g>
     </g>
   </g>
 </svg>
