@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="Results: Focus Freeze gets 88 of 88 on the blind test set, a keyword table 66% and an idle timer 57%; 0 unsafe freezes in 270 attack runs; about $0.002 per plan">
+<title>Focus Freeze results</title>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0D151B"/><stop offset="1" stop-color="#121D25"/></linearGradient>
+  <radialGradient id="aura" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#8ED8EE" stop-opacity=".13"/><stop offset="1" stop-color="#8ED8EE" stop-opacity="0"/></radialGradient>
+  <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1C2933"/><stop offset="1" stop-color="#162029"/></linearGradient>
+  <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".07"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  <filter id="shadow" x="-10%" y="-20%" width="120%" height="150%"><feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity=".38"/></filter>
+  <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="10"/></filter>
+  <g id="flake" fill="none" stroke-linecap="round"><path d="M0-11V11M-9.5-5.5 9.5 5.5M-9.5 5.5 9.5-5.5" stroke-width="2.4"/><path d="M-3-8 0-5 3-8M-3 8 0 5 3 8M-9.9-1.2-6.1-2.6-7.2-6.4M9.9 1.2 6.1 2.6 7.2 6.4M-9.9 1.2-6.1 2.6-7.2 6.4M9.9-1.2 6.1-2.6 7.2-6.4" stroke-width="1.6"/></g>
+  <clipPath id="b0"><rect x="250" y="132" width="560" height="22" rx="11"/></clipPath><linearGradient id="sh2" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".6"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+</defs>
+<style>
+text { font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+.in   { animation: in .9s cubic-bezier(.22,1,.36,1) both; }
+.chip-in { animation: chipin .6s cubic-bezier(.22,1,.36,1) both; }
+@keyframes in     { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes chipin { from { opacity: 0; transform: translateY(6px); }  to { opacity: 1; transform: none; } }
+.loop { animation-timing-function: cubic-bezier(.65,0,.35,1); animation-iteration-count: infinite; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+.grow { transform-box: fill-box; transform-origin: left center; animation: grow 1.4s cubic-bezier(.22,1,.36,1) both; }
+@keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.val { animation: val .7s cubic-bezier(.22,1,.36,1) both; }
+@keyframes val { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+.sheen2 { animation: sheen2 5s cubic-bezier(.65,0,.35,1) infinite; }
+@keyframes sheen2 { 0% { transform: translateX(0); } 30% { transform: translateX(760px); } 100% { transform: translateX(760px); } }
+.halo { transform-box: fill-box; transform-origin: center; animation: halo 2.6s cubic-bezier(.65,0,.35,1) infinite alternate; }
+@keyframes halo { from { transform: scale(1); opacity: .12; } to { transform: scale(1.25); opacity: .28; } }
+</style>
+<rect width="1200" height="340" rx="24" fill="url(#bg)"/>
+<ellipse cx="180" cy="20" rx="560" ry="300" fill="url(#aura)"/>
+<ellipse cx="1080" cy="340" rx="420" ry="220" fill="url(#aura)" opacity=".6"/>
+<rect x=".5" y=".5" width="1199" height="339" rx="23.5" fill="none" stroke="#27353F"/>
+<g class="in">
+  <text x="48" y="54" fill="#8ED8EE" font-size="13" font-weight="700" letter-spacing="2.4">RESULTS</text>
+  <text x="48" y="88" fill="#F1F5F7" font-size="26" font-weight="700">Which apps does your task need?</text>
+  <text x="491" y="88" fill="#93A4AE" font-size="15">blind test set, never tuned on</text>
+</g>
+<g class="in" style="animation-delay:0.15s">
+  <text x="48" y="148" fill="#F1F5F7" font-size="17" font-weight="600">Focus Freeze</text>
+  <text x="48" y="168" fill="#93A4AE" font-size="13">Muse Spark 1.3</text>
+  <rect x="250" y="132" width="560" height="22" rx="11" fill="#2A3843"/>
+</g>
+<rect class="grow" style="animation-delay:0.35s" x="250" y="132" width="560" height="22" rx="11" fill="#8ED8EE"/>
+<g clip-path="url(#b0)"><rect class="sheen2" style="animation-delay:1.95s" x="130" y="132" width="100" height="22" fill="url(#sh2)"/></g>
+<text class="val" style="animation-delay:1.35s" x="826" y="150" fill="#8ED8EE" font-size="20" font-weight="700">88 / 88</text><g class="in" style="animation-delay:0.30s">
+  <text x="48" y="210" fill="#F1F5F7" font-size="17" font-weight="600">Keyword table</text>
+  
+  <rect x="250" y="194" width="560" height="22" rx="11" fill="#2A3843"/>
+</g>
+<rect class="grow" style="animation-delay:0.50s" x="250" y="194" width="370" height="22" rx="11" fill="#A5B4BD"/>
+
+<text class="val" style="animation-delay:1.50s" x="636" y="212" fill="#A5B4BD" font-size="20" font-weight="700">66%</text><g class="in" style="animation-delay:0.45s">
+  <text x="48" y="272" fill="#F1F5F7" font-size="17" font-weight="600">Idle timer</text>
+  
+  <rect x="250" y="256" width="560" height="22" rx="11" fill="#2A3843"/>
+</g>
+<rect class="grow" style="animation-delay:0.65s" x="250" y="256" width="319" height="22" rx="11" fill="#F0B37E"/>
+
+<text class="val" style="animation-delay:1.65s" x="585" y="274" fill="#F0B37E" font-size="20" font-weight="700">57%</text>
+<g transform="translate(916 112)"><g class="in" style="animation-delay:.6s">
+  <rect width="244" height="96" rx="16" fill="url(#card)" filter="url(#shadow)"/><rect x=".5" y=".5" width="243" height="95" rx="15.5" fill="none" stroke="#27353F"/>
+  <g transform="translate(40 48)">
+    <circle class="halo" r="24" fill="#6FD08C"/>
+    <path d="M0-15 12-10V-2C12 7 6 12 0 15-6 12-12 7-12-2V-10Z" fill="#6FD08C" fill-opacity=".18" stroke="#6FD08C" stroke-width="2"/>
+    <path d="M-5 0-1 4 6-4" stroke="#6FD08C" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+  </g>
+  <text x="80" y="48" fill="#6FD08C" font-size="28" font-weight="700">0 / 270</text>
+  <text x="80" y="72" fill="#93A4AE" font-size="13.5">unsafe freezes, attack runs</text>
+</g></g>
+<g transform="translate(916 222)"><g class="in" style="animation-delay:.75s">
+  <rect width="244" height="96" rx="16" fill="url(#card)" filter="url(#shadow)"/><rect x=".5" y=".5" width="243" height="95" rx="15.5" fill="none" stroke="#27353F"/>
+  <g transform="translate(40 48)"><circle class="halo" style="animation-delay:-1.3s" r="24" fill="#8ED8EE"/><text y="8" text-anchor="middle" fill="#8ED8EE" font-size="22" font-weight="700">$</text></g>
+  <text x="80" y="48" fill="#F1F5F7" font-size="28" font-weight="700">~$0.002</text>
+  <text x="80" y="72" fill="#93A4AE" font-size="13.5">per plan</text>
+</g></g>
+</svg>
