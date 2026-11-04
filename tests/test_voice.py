@@ -223,3 +223,53 @@ def test_hotkey_reports_the_combo_it_got_when_the_first_is_taken():
     finally:
         hk.stop()
         release.set()
+
+
+# ---- microphone choice -------------------------------------------------------
+# Real case: Windows' default input was an empty Realtek jack ("Prise microphone",
+# median RMS ~60) while the built-in mic one entry below heard the room (~700).
+
+def test_an_empty_default_jack_loses_to_the_live_mic():
+    assert voice.pick_mic({1: 60.0, 2: 717.0}, default=1) == 2
+
+
+def test_the_default_mic_wins_when_it_is_alive():
+    # A headset quieter than the laptop mic is still the user's choice.
+    assert voice.pick_mic({1: 300.0, 2: 717.0}, default=1) == 1
+
+
+def test_no_readable_inputs_keeps_the_default():
+    assert voice.pick_mic({}, default=1) == 1
+    assert voice.pick_mic({2: 500.0}, default=1) == 2   # default would not even open
+
+
+def test_ff_mic_overrides_the_probe(monkeypatch):
+    monkeypatch.setattr(voice, "input_devices", lambda: [(1, "Prise microphone"), (2, "Microphone (Realtek)")])
+    monkeypatch.setattr(voice, "measure_inputs", lambda _d: pytest.fail("FF_MIC must skip the probe"))
+    monkeypatch.setenv("FF_MIC", "realtek")
+    ptt = voice.PushToTalk(lambda *_: None, lambda _m: None, api_key="k")
+    assert ptt.choose_mic() == "Microphone (Realtek)" and ptt.device == 2
+
+
+def test_a_silent_hold_switches_mic_instead_of_didnt_catch_that(monkeypatch):
+    async def fake_transcribe(frames, key, on_partial=None):
+        return "", 0
+    monkeypatch.setattr(voice, "transcribe", fake_transcribe)
+    errors, heard = [], []
+    ptt = voice.PushToTalk(lambda t, _u: heard.append(t), errors.append, api_key="k")
+
+    def choose():
+        ptt.device, ptt.mic_name = 2, "Microphone (Realtek)"
+    monkeypatch.setattr(ptt, "choose_mic", choose)
+    ptt._run(queue.Queue(), {"peak": 90.0})
+    assert not heard and "Switched to Microphone (Realtek)" in errors[0]
+
+
+def test_a_loud_hold_with_no_words_is_still_a_transcript(monkeypatch):
+    async def fake_transcribe(frames, key, on_partial=None):
+        return "", 0
+    monkeypatch.setattr(voice, "transcribe", fake_transcribe)
+    heard = []
+    ptt = voice.PushToTalk(lambda t, _u: heard.append(t), lambda _m: pytest.fail("no hint"), api_key="k")
+    ptt._run(queue.Queue(), {"peak": 3000.0})
+    assert heard == [""]
